@@ -1,7 +1,7 @@
-project('ice', 'c', version : '2.31',
-                    meson_version : '>=0.45.0',
-                    license : 'BSD3',
-                    default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
+project('mrt_data_reader', 'c', version : '2.31',
+                                meson_version : '>=0.45.0',
+                                license : 'BSD3',
+                                default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
 
 isocore_dep = dependency('isocore', fallback : [ 'isocore', 'isocore_dep' ])
 
@@ -17,8 +17,8 @@ add_project_arguments(
 mrt_data_reader = executable('mrt_data_reader',
     sources : [
         'src/main.c',
+        'src/mrtdataread.c'
     ],
     dependencies : [ isocore_dep ],
     install : true
 )
-

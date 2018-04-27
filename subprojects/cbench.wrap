@@ -1,0 +1,6 @@
+[wrap-git]
+directory=cbench
+url=Ilum:~/GIT_repositories/cbench
+revision=head
+push-url=Ilum:~/GIT_repositories/cbench
+
