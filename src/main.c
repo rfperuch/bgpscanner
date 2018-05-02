@@ -122,12 +122,7 @@ int main(int argc, char **argv)
                 continue;
             }
 
-            io.file  = file;
-            io.read  = io_fread;
-            io.write = io_fwrite;
-            io.error = io_ferror;
-            io.close = io_fclose;
-
+            io_file_init(&io, file);
             iop = &io;
         }
 
