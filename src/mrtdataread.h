@@ -33,11 +33,12 @@
 
 #include <isolario/io.h>
 #include <stdarg.h>
+#include <stdnoreturn.h>
 
 void evprintf(const char *fmt, va_list va);
 void eprintf(const char *fmt, ...);
-void exvprintf(const char *fmt, va_list va);
-void exprintf(const char *fmt, ...);
+noreturn void exvprintf(const char *fmt, va_list va);
+noreturn void exprintf(const char *fmt, ...);
 
 int mrtprocess(io_rw_t *rw);
 

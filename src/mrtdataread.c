@@ -28,14 +28,16 @@
 // THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
-#include "mrtdataread.h"
 #include <errno.h>
+#include <inttypes.h>
 #include <isolario/bgp.h>
 #include <isolario/mrt.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "mrtdataread.h"
 
 void evprintf(const char *fmt, va_list va)
 {
@@ -57,13 +59,13 @@ void eprintf(const char *fmt, ...)
     va_end(va);
 }
 
-void exvprintf(const char *fmt, va_list va)
+noreturn void exvprintf(const char *fmt, va_list va)
 {
     evprintf(fmt, va);
     exit(EXIT_FAILURE);
 }
 
-void exprintf(const char *fmt, ...)
+noreturn void exprintf(const char *fmt, ...)
 {
     va_list va;
 
@@ -79,6 +81,25 @@ int mrtprocess(io_rw_t *io)
         return -1;
     }
 
+    mrt_header_t *hdr = getmrtheader();
+    printf("type: %d subtype: %d\n", hdr->type, hdr->subtype);
+    peer_entry_t *i;
+    char buf[256];
+    size_t n = getpiviewname(buf, sizeof(buf));
+    printf("view name: %s (actual length %zu)\n", buf, n);
+
+    size_t count;
+    startpeerents(&count);
+    printf("reading %zu peer entries\n", count);
+
+    int idx = 0;
+    while ((i = nextpeerent()) != NULL) {
+        inet_ntop(i->afi == AFI_IPV4 ? AF_INET : AF_INET6, &i->in, buf, sizeof(buf));
+        printf("peer entry %d: AS (%zu bytes): %" PRIu32 " AFI: %s - %s\n", idx, i->as_size, i->as, i->afi == AFI_IPV4 ? "v4" : "v6", buf);
+        idx++;
+    }
+
+    endpeerents();
     mrtclose();
     return 0;
 }
