@@ -33,6 +33,7 @@
 #include <isolario/bgp.h>
 #include <isolario/cache.h>
 #include <isolario/dumppacket.h>
+#include <isolario/filterintrin.h>
 #include <isolario/mrt.h>
 #include <isolario/progutil.h>
 #include <pthread.h>
@@ -44,8 +45,18 @@
 
 #include "mrtdataread.h"
 
+enum {
+    MAX_PEERREF_BITSET_SIZE = UINT16_MAX / (sizeof(unsigned int) * CHAR_BIT)
+};
+
 static bool seen_ribpi;
 static unsigned long long pkgseq;
+
+static uint32_t peerrefs[MAX_PEERREF_BITSET_SIZE];
+enum {
+    PEERREF_SHIFT = 5,
+    PEERREF_MASK  = 0x1f
+};
 
 static void processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm)
 {
@@ -81,7 +92,27 @@ static void processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_
     }
 }
 
-static int processtabledumpv2(const char *filename, const mrt_header_t*hdr, filter_vm_t *vm)
+static int istrivialfilter(filter_vm_t *vm)
+{
+    return vm->codesiz == 1 && vm->code[0] == vm_makeop(FOPC_LOAD, true);
+}
+
+enum {
+    DONT_DUMP_RIBS,
+    DUMP_RIBS
+};
+
+static void refpeeridx(uint16_t idx)
+{
+    peerrefs[idx >> PEERREF_SHIFT] |= 1 << (idx & PEERREF_MASK);
+}
+
+static int ispeeridxref(uint16_t idx)
+{
+    return peerrefs[idx >> PEERREF_SHIFT] & (1 << (idx & PEERREF_MASK));
+}
+
+static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, int mode)
 {
     const rib_header_t *ribhdr;
     const rib_entry_t *rib;
@@ -106,28 +137,30 @@ static int processtabledumpv2(const char *filename, const mrt_header_t*hdr, filt
     case MRT_TABLE_DUMPV2_RIB_IPV6_UNICAST:
         ribhdr = startribents(NULL);
         while ((rib = nextribent()) != NULL) {
-            vm->kp[K_PEER_AS].as = rib->peer->as;
-            // FIXME
-            if (rib->peer->afi == AFI_IPV4) {
-                memcpy(&vm->kp[K_PEER_ADDR].addr.sin, &rib->peer->in, sizeof(rib->peer->in));
-                vm->kp[K_PEER_ADDR].addr.bitlen = 32;
-                vm->kp[K_PEER_ADDR].addr.family = AF_INET;
-            } else {
-                memcpy(&vm->kp[K_PEER_ADDR].addr.sin6, &rib->peer->in6, sizeof(rib->peer->in6));
-                vm->kp[K_PEER_ADDR].addr.bitlen = 128;
-                vm->kp[K_PEER_ADDR].addr.family = AF_INET6;
+            int res = true;  // assume packet passes
+            int must_close_bgp = false;
+
+            // we want to avoid rebuilding a BGP packet in case we don't want to dump it
+            // or we don't want to filter it (think about a peer-index dump without any filtering)
+            if (mode == DUMP_RIBS || !istrivialfilter(vm)) {
+                vm->kp[K_PEER_AS].as = rib->peer->as;
+                memcpy(&vm->kp[K_PEER_ADDR].addr, &rib->peer->addr, sizeof(vm->kp[K_PEER_ADDR].addr));
+
+                rebuildbgpfrommrt(&ribhdr->nlri, rib->peer->as_size, rib->attrs, rib->attr_length, BGPF_GUESSMRT);
+                must_close_bgp = true;
+                int res = bgp_filter(vm);
+                if (res < 0 && res != VM_PACKET_MISMATCH)
+                    exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
             }
 
-            rebuildbgpfrommrt(&ribhdr->nlri, rib->peer->as_size, rib->attrs, rib->attr_length, BGPF_GUESSMRT);
+            if (res) {
+                refpeeridx(rib->peer_idx);
+                if (mode == DUMP_RIBS)
+                    printbgp(stdout, "#A*F*t", rib->peer->as_size, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
+            }
 
-            int res = bgp_filter(vm);
-            if (res < 0 && res != VM_PACKET_MISMATCH)
-                exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
-
-            if (res)
-                printbgp(stdout, "#A*F*t", rib->peer->as_size, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
-
-            bgpclose();
+            if (must_close_bgp)
+                bgpclose();
         }
 
         endribents();
@@ -141,18 +174,74 @@ static int processtabledumpv2(const char *filename, const mrt_header_t*hdr, filt
     return true;
 }
 
-int mrtprocess(const char *filename, io_rw_t *io, filter_vm_t *vm)
+int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
+{
+    int retval = 0;
+
+    seen_ribpi = false;
+    pkgseq     = 0;
+    memset(peerrefs, 0, sizeof(peerrefs));
+
+    while (true) {
+        int err = setmrtreadfrom(rw);
+        if (err == MRT_EIO)
+            break;
+
+        const mrt_header_t *hdr = getmrtheader();
+        if (hdr != NULL && hdr->type == MRT_TABLE_DUMPV2) {
+            if (!processtabledumpv2(filename, hdr, vm, DONT_DUMP_RIBS)) {
+                retval = -1;
+                goto done;
+            }
+        }
+
+        err = mrtclose();
+        if (unlikely(err != MRT_ENOERR))
+            eprintf("%s: corrupted packet: %s", filename, mrtstrerror(err));  // FIXME better reporting
+    }
+
+    if (seen_ribpi) {
+        mrt_msg_t *peer_index = getmrtpi();
+        startpeerents_r(peer_index, NULL);
+
+        peer_entry_t *pe;
+        uint16_t idx = 0;
+        while ((pe = nextpeerent_r(peer_index))) {
+            if (ispeeridxref(idx))
+                printpeerent(stdout, pe, "r");
+
+            idx++;
+        }
+
+        endpeerents_r(peer_index);
+    }
+
+done:
+
+    if (seen_ribpi)
+        mrtclosepi();
+
+    if (rw->error(rw)) {
+        eprintf("%s: read error or corrupted data, skipping rest of file", filename);
+        retval = -1;
+    }
+
+    return retval;
+}
+
+int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm)
 {
     void *data;
     size_t n;
 
     seen_ribpi = false;
     pkgseq     = 0;
+    // don't care about peerrefs
 
     int retval = 0;
 
     while (true) {
-        int err = setmrtreadfrom(io);
+        int err = setmrtreadfrom(rw);
         if (err == MRT_EIO)
             break;
 
@@ -160,7 +249,7 @@ int mrtprocess(const char *filename, io_rw_t *io, filter_vm_t *vm)
         if (hdr != NULL) {
             switch (hdr->type) {
             case MRT_TABLE_DUMPV2:
-                if (!processtabledumpv2(filename, hdr, vm)) {
+                if (!processtabledumpv2(filename, hdr, vm, DUMP_RIBS)) {
                     retval = -1;
                     goto done;
                 }
@@ -192,7 +281,7 @@ done:
     if (seen_ribpi)
         mrtclosepi();
 
-    if (io->error(io)) {
+    if (rw->error(rw)) {
         eprintf("%s: read error or corrupted data, skipping rest of file", filename);
         retval = -1;
     }

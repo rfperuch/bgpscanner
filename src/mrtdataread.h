@@ -45,6 +45,8 @@ enum {
     MRT_ACCUMULATE_ASES_FN
 };
 
+int mrtprintpeeridx(const char *filename, io_rw_t *rw, filter_vm_t *vm);
+
 int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm);
 
 #endif

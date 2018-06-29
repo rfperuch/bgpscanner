@@ -94,12 +94,13 @@ static void usage(void)
 
 enum {
     DBG_DUMP            = 1 << 0,
-    FILTER_BY_PEER_ADDR = 1 << 1,
-    FILTER_BY_PEER_AS   = 1 << 2,
-    FILTER_EXACT        = 1 << 3,
-    FILTER_RELATED      = 1 << 4,
-    FILTER_BY_SUBNET    = 1 << 5,
-    FILTER_BY_SUPERNET  = 1 << 6,
+    ONLY_PEERS          = 1 << 1,
+    FILTER_BY_PEER_ADDR = 1 << 2,
+    FILTER_BY_PEER_AS   = 1 << 3,
+    FILTER_EXACT        = 1 << 4,
+    FILTER_RELATED      = 1 << 5,
+    FILTER_BY_SUBNET    = 1 << 6,
+    FILTER_BY_SUPERNET  = 1 << 7,
 
     FILTER_MASK = (FILTER_EXACT | FILTER_RELATED | FILTER_BY_SUBNET | FILTER_BY_SUPERNET)
 };
@@ -275,7 +276,7 @@ int main(int argc, char **argv)
     vm.funcs[MRT_ACCUMULATE_ASES_FN]  = mrt_accumulate_ases;
 
     // parse command line
-    while ((c = getopt(argc, argv, "a:A:dE:e:i:I:o:R:r:S:s:U:u:")) != -1) {
+    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:o:R:r:S:s:U:u:")) != -1) {
         switch (c) {
         case 'a':
             if (!add_peer_as(optarg))
@@ -297,6 +298,10 @@ int main(int argc, char **argv)
             if (!freopen(optarg, "w", stdout))
                 exprintf(EXIT_FAILURE, "cannot open '%s':", optarg);
 
+            break;
+
+        case 'f':
+            flags |= ONLY_PEERS;
             break;
 
         case 'E':
@@ -425,7 +430,13 @@ int main(int argc, char **argv)
         if (fd != STDIN_FILENO)
             posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 
-        if (mrtprocess(argv[i], iop, &vm) != 0)
+        int res;
+        if (flags & ONLY_PEERS)
+            res = mrtprintpeeridx(argv[i], iop, &vm);
+        else
+            res = mrtprocess(argv[i], iop, &vm);
+
+        if (res != 0)
             nerrors++;
 
         if (fd != STDIN_FILENO)
