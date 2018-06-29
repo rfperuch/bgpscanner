@@ -31,16 +31,21 @@
 #ifndef ISOLARIO_MRTDATAREAD_H_
 #define ISOLARIO_MRTDATAREAD_H_
 
+#include <isolario/filterpacket.h>
 #include <isolario/io.h>
-#include <stdarg.h>
-#include <stdnoreturn.h>
 
-void evprintf(const char *fmt, va_list va);
-void eprintf(const char *fmt, ...);
-noreturn void exvprintf(const char *fmt, va_list va);
-noreturn void exprintf(const char *fmt, ...);
+enum {
+    K_PEER_AS,
+    K_PEER_ADDR
+};
 
-int mrtprocess(io_rw_t *rw);
+// filtering functions to fill the stack with peer addresses and ASes
+enum {
+    MRT_ACCUMULATE_ADDRS_FN,
+    MRT_ACCUMULATE_ASES_FN
+};
+
+int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm);
 
 #endif
 
