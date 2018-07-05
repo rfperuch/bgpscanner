@@ -58,38 +58,82 @@ enum {
     PEERREF_MASK  = 0x1f
 };
 
-static void processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm)
+static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm)
 {
+    size_t n;
+    void *data;
+
     const bgp4mp_header_t *bgphdr = getbgp4mpheader();
+    if (unlikely(!bgphdr)) {
+        eprintf("%s: corrupted BGP4MP header (%s)", filename, mrtstrerror(mrterror()));
+        return false;
+    }
 
     vm->kp[K_PEER_AS].as = bgphdr->peer_as;
     memcpy(&vm->kp[K_PEER_ADDR].addr, &bgphdr->peer_addr, sizeof(vm->kp[K_PEER_ADDR].addr));
 
-    int res;
+    int res, err;
 
-    size_t as_size = sizeof(uint16_t);
+    int flags = BGPF_NOCOPY;
+    size_t as_size = sizeof(uint16_t); // for state changes
+
+    err = BGP_ENOERR;
     switch (hdr->subtype) {
+    case BGP4MP_STATE_CHANGE_AS4:
+        as_size = sizeof(uint32_t);
+        // fallthrough
+    case BGP4MP_STATE_CHANGE:
+        printstatechange(stdout, bgphdr, "A*F*T", as_size, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+        break;
+
+    case BGP4MP_MESSAGE_AS4_ADDPATH:
+    case BGP4MP_MESSAGE_AS4_LOCAL_ADDPATH:
+        flags |= BGPF_ADDPATH;
+        // fallthrough
     case BGP4MP_MESSAGE_AS4:
     case BGP4MP_MESSAGE_AS4_LOCAL:
-        as_size = sizeof(uint32_t);
+        flags |= BGPF_ASN32BIT;
+        // fallthrough
+    case BGP4MP_MESSAGE_ADDPATH:
+    case BGP4MP_MESSAGE_LOCAL_ADDPATH:
+        // if BGPF_ASN32BIT is on, then we're arriving here through the case above,
+        // so don't modify the flags
+        flags |= (flags & BGPF_ASN32BIT) == 0 ? BGPF_ADDPATH : 0;
         // fallthrough
     case BGP4MP_MESSAGE:
     case BGP4MP_MESSAGE_LOCAL:
-        res = bgp_filter(vm);
-        if (res < 0 && res != VM_PACKET_MISMATCH)
-            exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
+        data = unwrapbgp4mp(&n);
+        if (unlikely(!data)) {
+            eprintf("%s: corrupted BGP4MP message (%s)", filename, mrtstrerror(mrterror()));
+            return false;
+        }
 
+        err = setbgpread(data, n, flags);
+        if (unlikely(err != BGP_ENOERR))
+            break;
+
+        res = true; // assume packet passes, we will only filter BGP data
+        if (getbgptype() == BGP_UPDATE) {
+            res = bgp_filter(vm);
+            if (res < 0)
+                exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
+        }
         if (res)
-            printbgp(stdout, "A*F*T", as_size, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+            printbgp(stdout, "F*T", &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
 
+        err = bgpclose();
         break;
-    case BGP4MP_STATE_CHANGE:
-        printstatechange(stdout, bgphdr, "A*F*T", sizeof(uint16_t), &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
-        break;
-    case BGP4MP_STATE_CHANGE_AS4:
-        printstatechange(stdout, bgphdr, "A*F*T", sizeof(uint32_t), &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+
+    default:
+        eprintf("%s: unhandled BGP4MP packet of subtype: %#x", filename, (unsigned int) hdr->subtype);
         break;
     }
+
+    if (unlikely(err != BGP_ENOERR)) {
+        eprintf("%s: corrupted BGP data in BGP4MP (%s)", filename, bgpstrerror(err));
+        return false;
+    }
+    return true;
 }
 
 static int istrivialfilter(filter_vm_t *vm)
@@ -117,6 +161,7 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
     const rib_header_t *ribhdr;
     const rib_entry_t *rib;
 
+    int ribflags = BGPF_GUESSMRT | BGPF_STRIPUNREACH;
     switch (hdr->subtype) {
     case MRT_TABLE_DUMPV2_PEER_INDEX_TABLE:
         if (unlikely(seen_ribpi)) {
@@ -131,10 +176,18 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
         seen_ribpi = true;
         break;
 
+    case MRT_TABLE_DUMPV2_RIB_IPV4_MULTICAST_ADDPATH:
+    case MRT_TABLE_DUMPV2_RIB_IPV4_UNICAST_ADDPATH:
+    case MRT_TABLE_DUMPV2_RIB_IPV6_MULTICAST_ADDPATH:
+    case MRT_TABLE_DUMPV2_RIB_IPV6_UNICAST_ADDPATH:
+    case MRT_TABLE_DUMPV2_RIB_GENERIC_ADDPATH:
+        ribflags |= BGPF_ADDPATH;
+        // fallthrough
     case MRT_TABLE_DUMPV2_RIB_IPV4_MULTICAST:
     case MRT_TABLE_DUMPV2_RIB_IPV4_UNICAST:
     case MRT_TABLE_DUMPV2_RIB_IPV6_MULTICAST:
     case MRT_TABLE_DUMPV2_RIB_IPV6_UNICAST:
+    case MRT_TABLE_DUMPV2_RIB_GENERIC:
         ribhdr = startribents(NULL);
         while ((rib = nextribent()) != NULL) {
             int res = true;  // assume packet passes
@@ -146,7 +199,19 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
                 vm->kp[K_PEER_AS].as = rib->peer->as;
                 memcpy(&vm->kp[K_PEER_ADDR].addr, &rib->peer->addr, sizeof(vm->kp[K_PEER_ADDR].addr));
 
-                rebuildbgpfrommrt(&ribhdr->nlri, rib->peer->as_size, rib->attrs, rib->attr_length, BGPF_GUESSMRT);
+                if (rib->peer->as_size == sizeof(uint32_t))
+                    ribflags |= BGPF_ASN32BIT;
+
+                if (ribflags & BGPF_ADDPATH) {
+                    netaddrap_t addrap;
+                    addrap.pfx    = ribhdr->nlri;
+                    addrap.pathid = rib->pathid;
+
+                    rebuildbgpfrommrt(&addrap, rib->attrs, rib->attr_length, ribflags);
+                } else {
+                    rebuildbgpfrommrt(&ribhdr->nlri, rib->attrs, rib->attr_length, ribflags);
+                }
+
                 must_close_bgp = true;
                 int res = bgp_filter(vm);
                 if (res < 0 && res != VM_PACKET_MISMATCH)
@@ -156,7 +221,7 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
             if (res) {
                 refpeeridx(rib->peer_idx);
                 if (mode == DUMP_RIBS)
-                    printbgp(stdout, "#A*F*t", rib->peer->as_size, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
+                    printbgp(stdout, "#F*t", &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
             }
 
             if (must_close_bgp)
@@ -231,15 +296,11 @@ done:
 
 int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm)
 {
-    void *data;
-    size_t n;
-
     seen_ribpi = false;
     pkgseq     = 0;
     // don't care about peerrefs
 
     int retval = 0;
-
     while (true) {
         int err = setmrtreadfrom(rw);
         if (err == MRT_EIO)
@@ -258,10 +319,11 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm)
 
             case MRT_BGP4MP:
             case MRT_BGP4MP_ET:
-                data = unwrapbgp4mp(&n);
-                setbgpread(data, n, BGPF_NOCOPY);
-                processbgp4mp(filename, hdr, vm);
-                bgpclose();
+                if (!processbgp4mp(filename, hdr, vm)) {
+                    retval = -1;
+                    goto done;
+                }
+
                 break;
 
             default:
