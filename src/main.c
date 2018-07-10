@@ -378,9 +378,10 @@ int main(int argc, char **argv)
     // apply to required files
     int nerrors = 0;
     for (int i = optind; i < argc; i++) {
-        io_rw_t *iop;
         io_rw_t io;
         int fd;
+
+        io_rw_t *iop = NULL;
 
         char *ext = strpathext(argv[i]);
         if (strcasecmp(ext, ".gz") == 0 || strcasecmp(ext, ".z") == 0) {
@@ -412,6 +413,7 @@ int main(int argc, char **argv)
             if (file) {
                 io_file_init(&io, file);
                 iop = &io;
+
                 fd = fileno(file);
             }
         }

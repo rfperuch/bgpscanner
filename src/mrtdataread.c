@@ -34,6 +34,7 @@
 #include <isolario/cache.h>
 #include <isolario/dumppacket.h>
 #include <isolario/filterintrin.h>
+#include <isolario/hexdump.h>
 #include <isolario/mrt.h>
 #include <isolario/progutil.h>
 #include <pthread.h>
@@ -57,6 +58,32 @@ enum {
     PEERREF_SHIFT = 5,
     PEERREF_MASK  = 0x1f
 };
+
+static int close_bgp_packet(const char *filename)
+{
+    int err = bgperror();
+    if (err != BGP_ENOERR) {
+        eprintf("%s: bad packet detected (%s)", filename, bgpstrerror(err));
+        fprintf(stderr, "binary packet dump follows:\n");
+
+        size_t n;
+        const void *data = getbgpdata(&n);
+
+        hexdump(stderr, data, n, "x#|1|80");
+        fputc('\n', stderr);
+    }
+
+    bgpclose();
+    return err;
+}
+
+static void report_bad_rib(const char *filename, int err, const rib_header_t *ribhdr, const rib_entry_t *rib)
+{
+    eprintf("%s: bad RIB entry for NLRI %s (%s)", filename, naddrtos(&ribhdr->nlri, NADDR_CIDR), bgpstrerror(err));
+    fprintf(stderr, "attributes segment dump follows:\n");
+    hexdump(stderr, rib->attrs, rib->attr_length, "x#|1|80");
+    fputc('\n', stderr);
+}
 
 static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm)
 {
@@ -112,16 +139,16 @@ static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_v
         if (unlikely(err != BGP_ENOERR))
             break;
 
-        res = true; // assume packet passes, we will only filter BGP data
+        res = true; // assume packet passes, we will only filter BGP updates
         if (getbgptype() == BGP_UPDATE) {
             res = bgp_filter(vm);
-            if (res < 0)
+            if (res < 0 && res != VM_BAD_PACKET)
                 exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
         }
-        if (res)
+        if (res > 0)
             printbgp(stdout, "F*T", &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
 
-        err = bgpclose();
+        err = close_bgp_packet(filename);
         break;
 
     default:
@@ -129,10 +156,9 @@ static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_v
         break;
     }
 
-    if (unlikely(err != BGP_ENOERR)) {
-        eprintf("%s: corrupted BGP data in BGP4MP (%s)", filename, bgpstrerror(err));
+    if (unlikely(err != BGP_ENOERR))
         return false;
-    }
+
     return true;
 }
 
@@ -165,11 +191,11 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
     switch (hdr->subtype) {
     case MRT_TABLE_DUMPV2_PEER_INDEX_TABLE:
         if (unlikely(seen_ribpi)) {
-            eprintf("%s: bad RIB dump, duplicated peer index table, skipping rest of file", filename);
+            eprintf("%s: bad RIB dump, duplicated TABLE_DUMPV2_PEER_INDEX_TABLE, skipping rest of file", filename);
             return false;
         }
         if (unlikely(pkgseq != 0))
-            eprintf("%s: warning, TABLE_DUMPV2_PEER_INDEX_TABLE is not the first packet in file", filename);
+            eprintf("%s: warning, TABLE_DUMPV2_PEER_INDEX_TABLE is not the first record in file", filename);
 
         setribpi();
 
@@ -202,30 +228,35 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
                 if (rib->peer->as_size == sizeof(uint32_t))
                     ribflags |= BGPF_ASN32BIT;
 
+                int err;
                 if (ribflags & BGPF_ADDPATH) {
                     netaddrap_t addrap;
                     addrap.pfx    = ribhdr->nlri;
                     addrap.pathid = rib->pathid;
 
-                    rebuildbgpfrommrt(&addrap, rib->attrs, rib->attr_length, ribflags);
+                    err = rebuildbgpfrommrt(&addrap, rib->attrs, rib->attr_length, ribflags);
                 } else {
-                    rebuildbgpfrommrt(&ribhdr->nlri, rib->attrs, rib->attr_length, ribflags);
+                    err = rebuildbgpfrommrt(&ribhdr->nlri, rib->attrs, rib->attr_length, ribflags);
+                }
+                if (err != BGP_ENOERR) {
+                    report_bad_rib(filename, err, ribhdr, rib);
+                    continue;
                 }
 
                 must_close_bgp = true;
-                int res = bgp_filter(vm);
-                if (res < 0 && res != VM_PACKET_MISMATCH)
+                res = bgp_filter(vm);
+                if (res < 0 && res != VM_BAD_PACKET)
                     exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
             }
 
-            if (res) {
+            if (res > 0) {
                 refpeeridx(rib->peer_idx);
                 if (mode == DUMP_RIBS)
                     printbgp(stdout, "#F*t", &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
             }
 
             if (must_close_bgp)
-                bgpclose();
+                close_bgp_packet(filename);
         }
 
         endribents();
