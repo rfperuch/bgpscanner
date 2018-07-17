@@ -76,7 +76,7 @@ static void usage(void)
     fprintf(stderr, "\t-I <file>\n");
     fprintf(stderr, "\t\tPrint only entries coming from the feeder IP contained in file\n");
     fprintf(stderr, "\t-o <file>\n");
-    fprintf(stderr, "\t\tDefine the output file to store information [default on stdout]\n");
+    fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
     fprintf(stderr, "\t-r <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets related to the given subnet of interest\n");
     fprintf(stderr, "\t-R <file>\n");
@@ -243,8 +243,8 @@ static void setup_filter(void)
         // only one filter may be set (otherwise it's an option conflict)
         vm_emit(&vm, vm_makeop(FOPC_SETTRIE,  trie_idx));
         vm_emit(&vm, vm_makeop(FOPC_SETTRIE6, trie6_idx));
-        vm_emit(&vm, vm_makeop(FOPC_CALL, VM_ALL_WITHDRAWN_ACCUMULATE_FN));
         vm_emit(&vm, vm_makeop(FOPC_CALL, VM_ALL_NLRI_ACCUMULATE_FN));
+        vm_emit(&vm, vm_makeop(FOPC_CALL, VM_ALL_WITHDRAWN_ACCUMULATE_FN));
         if (flags & FILTER_EXACT)
             vm_emit(&vm, FOPC_EXACT);
         if (flags & FILTER_RELATED)
@@ -253,7 +253,10 @@ static void setup_filter(void)
             vm_emit(&vm, FOPC_SUBNET);
         if (flags & FILTER_BY_SUPERNET)
             vm_emit(&vm, FOPC_SUPERNET);
-
+        /*
+        if (flags & FILTER_BY_SUBNET)
+            vm_emit(&vm, vm_makeop(FOPC_PSUBNET, PKT_ACC_ALL));
+     TODO */
     } else {
         // we don't have any filtering to do, or we only filter by feeder
         vm_emit(&vm, vm_makeop(FOPC_LOAD, true));

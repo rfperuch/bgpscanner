@@ -65,6 +65,7 @@ static int close_bgp_packet(const char *filename)
     if (err != BGP_ENOERR) {
         eprintf("%s: bad packet detected (%s)", filename, bgpstrerror(err));
         fprintf(stderr, "binary packet dump follows:\n");
+        fprintf(stderr, "ASN32BIT: %s ADDPATH: %s\n", isbgpasn32bit() ? "yes" : "no", isbgpaddpath() ? "yes" : "no");
 
         size_t n;
         const void *data = getbgpdata(&n);
