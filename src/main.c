@@ -28,6 +28,7 @@
 // THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 //
 
+#include <errno.h>
 #include <fcntl.h>
 #include <isolario/bits.h>
 #include <isolario/filterintrin.h>
@@ -53,10 +54,10 @@ static void usage(void)
 {
     fprintf(stderr, "%s: The Isolario MRT data reader utility\n", programnam);
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "\t%s [-d] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-d] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-d] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-d] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-o FILE] [FILE...]\n", programnam);
     fprintf(stderr, "\n");
     fprintf(stderr, "Available options:\n");
     fprintf(stderr, "\t-a <feeder AS>\n");
@@ -77,6 +78,8 @@ static void usage(void)
     fprintf(stderr, "\t\tPrint only entries coming from the feeder IP contained in file\n");
     fprintf(stderr, "\t-o <file>\n");
     fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
+    fprintf(stderr, "\t-a <path expression>");
+    fprintf(stderr, "\t\tFilter packets by AS PATH");
     fprintf(stderr, "\t-r <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets related to the given subnet of interest\n");
     fprintf(stderr, "\t-R <file>\n");
@@ -95,12 +98,13 @@ static void usage(void)
 enum {
     DBG_DUMP            = 1 << 0,
     ONLY_PEERS          = 1 << 1,
-    FILTER_BY_PEER_ADDR = 1 << 2,
-    FILTER_BY_PEER_AS   = 1 << 3,
-    FILTER_EXACT        = 1 << 4,
-    FILTER_RELATED      = 1 << 5,
-    FILTER_BY_SUBNET    = 1 << 6,
-    FILTER_BY_SUPERNET  = 1 << 7,
+    MATCH_AS_PATH       = 1 << 2,
+    FILTER_BY_PEER_ADDR = 1 << 3,
+    FILTER_BY_PEER_AS   = 1 << 4,
+    FILTER_EXACT        = 1 << 5,
+    FILTER_RELATED      = 1 << 6,
+    FILTER_BY_SUBNET    = 1 << 7,
+    FILTER_BY_SUPERNET  = 1 << 8,
 
     FILTER_MASK = (FILTER_EXACT | FILTER_RELATED | FILTER_BY_SUBNET | FILTER_BY_SUPERNET)
 };
@@ -121,9 +125,18 @@ static netaddr_t *peer_addrs = NULL;
 static int addrs_count       = 0;
 static int addrs_siz         = 0;
 
+typedef struct as_path_match_s {
+    struct as_path_match_s *next;
+    int opcode;
+    int kidx;
+} as_path_match_t;
+
+static as_path_match_t *path_match_head = NULL;
+static as_path_match_t *path_match_tail = NULL;
+
 static noreturn void naddr_parse_error(const char *name, unsigned int lineno, const char *msg)
 {
-    exprintf(EXIT_FAILURE, "%s:%u: %s\n", name, lineno, msg);
+    exprintf(EXIT_FAILURE, "%s:%u: %s", name, lineno, msg);
 }
 
 static int add_trie_address(const char *s)
@@ -239,6 +252,15 @@ static void setup_filter(void)
         vm_emit(&vm, FOPC_NOT);
         vm_emit(&vm, FOPC_CFAIL);
     }
+
+    for (as_path_match_t *i = path_match_head; i; i = i->next) {
+        vm_emit(&vm, vm_makeop(FOPC_LOADK, i->kidx));
+        vm_emit(&vm, FOPC_UNPACK);
+        vm_emit(&vm, vm_makeop(i->opcode, PKT_ACC_REAL_AS_PATH));
+        vm_emit(&vm, FOPC_NOT);
+        vm_emit(&vm, FOPC_CFAIL);
+    }
+
     if (flags & FILTER_MASK) {
         // only one filter may be set (otherwise it's an option conflict)
         vm_emit(&vm, vm_makeop(FOPC_SETTRIE,  trie_idx));
@@ -263,6 +285,91 @@ static void setup_filter(void)
     }
 }
 
+static void parse_as_match_expr(const char *expr)
+{
+    int opcode = FOPC_ASPMATCH;
+
+    if (*expr == '\0')
+        exprintf(EXIT_FAILURE, "empty AS match expression");
+
+    uint32_t buf[strlen(expr) / 2 + 1];  // wild upperbound
+    int count = 0;
+
+    const char *ptr = expr;
+    if (*ptr == '^') {
+        opcode = FOPC_ASPSTARTS;
+        ptr++;
+    }
+
+    while (true) {
+        char *eptr;
+
+        errno = 0;
+
+        long long as = strtoll(ptr, &eptr, 10);
+        if (ptr == eptr) {
+            int len = ptr - expr;
+            const char *at = expr;
+            if (len == 0) {
+                at = "[expression start]";
+                len = strlen(at);
+            }
+
+            exprintf(EXIT_FAILURE, "%s: expecting AS number after: '%.*s'", expr, len, at);
+        }
+        if (as < 0 || as > UINT32_MAX)
+            errno = ERANGE;
+        if (errno != 0)
+            exprintf(EXIT_FAILURE, "%s: AS number '%lld':", expr, as);
+
+        ptr = eptr;
+        if (*ptr == '$') {
+            opcode = (opcode == FOPC_ASPSTARTS) ? FOPC_ASPEXACT : FOPC_ASPENDS;
+            ptr++;
+
+            if (*ptr != '\0')
+                exprintf(EXIT_FAILURE, "%s: expecting expression end after '$'", expr);
+        }
+
+        buf[count++] = as;
+
+        if (*ptr == '\0')
+            break;
+
+        if (*ptr != ',')
+            exprintf(EXIT_FAILURE, "%s: expecting comma after '%lld'", expr, as);
+
+        ptr++;
+    }
+
+    as_path_match_t *match = malloc(sizeof(*match) + count * sizeof(*buf));
+    if (unlikely(!match))
+        exprintf(EXIT_FAILURE, "out of memory");
+
+    intptr_t heapptr = vm_heap_alloc(&vm, count * sizeof(*buf), VM_HEAP_PERM);
+    if (unlikely(heapptr == VM_BAD_HEAP_PTR))
+        exprintf(EXIT_FAILURE, "out of memory");
+
+    memcpy(vm_heap_ptr(&vm, heapptr), buf, count * sizeof(*buf));
+
+    int kidx = vm_newk(&vm);
+
+    vm.kp[kidx].base  = heapptr;
+    vm.kp[kidx].elsiz = sizeof(*buf);
+    vm.kp[kidx].nels  = count;
+
+    match->opcode = opcode;
+    match->kidx   = kidx;
+    match->next   = NULL;
+
+    if (path_match_tail)
+        path_match_tail->next = match;
+    else
+        path_match_head = match;
+
+    path_match_tail = match;
+}
+
 int main(int argc, char **argv)
 {
     int c;
@@ -279,7 +386,7 @@ int main(int argc, char **argv)
     vm.funcs[MRT_ACCUMULATE_ASES_FN]  = mrt_accumulate_ases;
 
     // parse command line
-    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:o:R:r:S:s:U:u:")) != -1) {
+    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:o:p:R:r:S:s:U:u:")) != -1) {
         switch (c) {
         case 'a':
             if (!add_peer_as(optarg))
@@ -345,6 +452,10 @@ int main(int argc, char **argv)
             if (!add_trie_address(optarg))
                 exprintf(EXIT_FAILURE, "bad address: %s", optarg);
 
+            break;
+
+        case 'p':
+            parse_as_match_expr(optarg);
             break;
 
         case 'i':
@@ -452,6 +563,12 @@ int main(int argc, char **argv)
     filter_destroy(&vm);
     free(peer_ases);
     free(peer_addrs);
+    while (path_match_head) {
+        as_path_match_t *t = path_match_head;
+        path_match_head = t->next;
+
+        free(t);
+    }
 
     if (fflush(stdout) != 0)
         exprintf(EXIT_FAILURE, "could not write to output file:");

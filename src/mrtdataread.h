@@ -36,7 +36,8 @@
 
 enum {
     K_PEER_AS,
-    K_PEER_ADDR
+    K_PEER_ADDR,
+    K_AS_PATH_ARRAY
 };
 
 // filtering functions to fill the stack with peer addresses and ASes
