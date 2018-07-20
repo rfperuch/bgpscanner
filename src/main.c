@@ -134,8 +134,10 @@ typedef struct as_path_match_s {
 static as_path_match_t *path_match_head = NULL;
 static as_path_match_t *path_match_tail = NULL;
 
-static noreturn void naddr_parse_error(const char *name, unsigned int lineno, const char *msg)
+static noreturn void naddr_parse_error(const char *name, unsigned int lineno, const char *msg, void *data)
 {
+    (void) data;
+
     exprintf(EXIT_FAILURE, "%s:%u: %s", name, lineno, msg);
 }
 
@@ -212,7 +214,7 @@ static void parse_file(const char *filename, int (*read_callback)(const char *))
         exprintf(EXIT_FAILURE, "cannot open '%s':", filename);
 
     setperrcallback(naddr_parse_error);
-    startparsing(filename, 1);
+    startparsing(filename, 1, NULL);
 
     char *tok;
     while ((tok = parse(f)) != NULL) {
