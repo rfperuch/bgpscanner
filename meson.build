@@ -1,7 +1,7 @@
-project('mrt_data_reader', 'c', version : '2.31',
-                                meson_version : '>=0.45.0',
-                                license : 'BSD3',
-                                default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
+project('bgpreader', 'c', version : '2.31',
+                          meson_version : '>=0.45.0',
+                          license : 'BSD3',
+                          default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
 
 threads_dep = dependency('threads')
 isocore_dep = dependency('isocore', fallback : [ 'isocore', 'isocore_dep' ])
@@ -15,7 +15,7 @@ add_project_arguments(
     language : 'c'
 )
 
-mrt_data_reader = executable('mrt_data_reader',
+bgpreader = executable('bgpreader',
     sources : [
         'src/main.c',
         'src/mrtdataread.c'
