@@ -1,4 +1,4 @@
-project('bgpreader', 'c', version : '2.31',
+project('bgpscanner', 'c', version : '2.31',
                           meson_version : '>=0.45.0',
                           license : 'BSD3',
                           default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
@@ -15,7 +15,7 @@ add_project_arguments(
     language : 'c'
 )
 
-bgpreader = executable('bgpreader',
+bgpscanner = executable('bgpscanner',
     sources : [
         'src/main.c',
         'src/mrtdataread.c'
