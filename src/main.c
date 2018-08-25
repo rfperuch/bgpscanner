@@ -78,8 +78,8 @@ static void usage(void)
     fprintf(stderr, "\t\tPrint only entries coming from the feeder IP contained in file\n");
     fprintf(stderr, "\t-o <file>\n");
     fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
-    fprintf(stderr, "\t-a <path expression>");
-    fprintf(stderr, "\t\tFilter packets by AS PATH");
+    fprintf(stderr, "\t-a <path expression>\n");
+    fprintf(stderr, "\t\tFilter packets by AS PATH\n");
     fprintf(stderr, "\t-r <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets related to the given subnet of interest\n");
     fprintf(stderr, "\t-R <file>\n");
