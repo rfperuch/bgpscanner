@@ -78,8 +78,8 @@ static void usage(void)
     fprintf(stderr, "\t\tPrint only entries coming from the feeder IP contained in file\n");
     fprintf(stderr, "\t-o <file>\n");
     fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
-    fprintf(stderr, "\t-a <path expression>\n");
-    fprintf(stderr, "\t\tFilter packets by AS PATH\n");
+    fprintf(stderr, "\t-p <path expression>");
+    fprintf(stderr, "\t\tFilter packets by AS PATH");
     fprintf(stderr, "\t-r <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets related to the given subnet of interest\n");
     fprintf(stderr, "\t-R <file>\n");
@@ -126,7 +126,9 @@ static int addrs_count       = 0;
 static int addrs_siz         = 0;
 
 typedef struct as_path_match_s {
-    struct as_path_match_s *next;
+    struct as_path_match_s *or_next;  // next match in OR-ed chain
+    struct as_path_match_s *and_next; // next match in AND chain
+
     int opcode;
     int kidx;
 } as_path_match_t;
@@ -255,10 +257,32 @@ static void setup_filter(void)
         vm_emit(&vm, FOPC_CFAIL);
     }
 
-    for (as_path_match_t *i = path_match_head; i; i = i->next) {
-        vm_emit(&vm, vm_makeop(FOPC_LOADK, i->kidx));
-        vm_emit(&vm, FOPC_UNPACK);
-        vm_emit(&vm, vm_makeop(i->opcode, PKT_ACC_REAL_AS_PATH));
+    if (path_match_head) {
+        // include the AS PATH filtering logic
+        vm_emit(&vm, FOPC_BLK);
+        for (as_path_match_t *i = path_match_head; i; i = i->or_next) {
+            // compile the AND chain
+            vm_emit(&vm, FOPC_BLK);
+            for (as_path_match_t *j = i; j; j = j->and_next) {
+                int access = FOPC_ACCESS_REAL_AS_PATH;
+                if (j == i)
+                    access |= FOPC_ACCESS_SETTLE; // rewind the AS PATH on first test
+
+                vm_emit(&vm, vm_makeop(FOPC_LOADK, j->kidx));
+                vm_emit(&vm, FOPC_UNPACK);
+                vm_emit(&vm, vm_makeop(j->opcode, access));
+                if (j->and_next) {  // omit the last AND term for optimization
+                    vm_emit(&vm, FOPC_NOT);
+                    vm_emit(&vm, FOPC_CFAIL);
+                }
+            }
+            vm_emit(&vm, FOPC_ENDBLK);
+            if (i->or_next)                // omit the conditional on last OR term
+                vm_emit(&vm, FOPC_CPASS);  // if the block was successful, the entire OR succeeded
+        }
+
+        vm_emit(&vm, FOPC_ENDBLK);
+        // must fail if none of the OR clauses was satisfied
         vm_emit(&vm, FOPC_NOT);
         vm_emit(&vm, FOPC_CFAIL);
     }
@@ -267,14 +291,20 @@ static void setup_filter(void)
         // only one filter may be set (otherwise it's an option conflict)
         vm_emit(&vm, vm_makeop(FOPC_SETTRIE,  trie_idx));
         vm_emit(&vm, vm_makeop(FOPC_SETTRIE6, trie6_idx));
+
+        bytecode_t opcode;
         if (flags & FILTER_EXACT)
-            vm_emit(&vm, vm_makeop(FOPC_EXACT, PKT_ACC_ALL_NETS));
+            opcode = FOPC_EXACT;
         if (flags & FILTER_RELATED)
-            vm_emit(&vm, vm_makeop(FOPC_RELATED, PKT_ACC_ALL_NETS));
+            opcode = FOPC_RELATED;
         if (flags & FILTER_BY_SUBNET)
-            vm_emit(&vm, vm_makeop(FOPC_SUBNET, PKT_ACC_ALL_NETS));
+            opcode = FOPC_SUBNET;
         if (flags & FILTER_BY_SUPERNET)
-            vm_emit(&vm, vm_makeop(FOPC_SUPERNET, PKT_ACC_ALL_NETS));
+            opcode = FOPC_SUPERNET;
+
+        vm_emit(&vm, vm_makeop(opcode, FOPC_ACCESS_SETTLE | FOPC_ACCESS_ALL | FOPC_ACCESS_NLRI));
+        vm_emit(&vm, FOPC_CPASS);
+        vm_emit(&vm, vm_makeop(opcode, FOPC_ACCESS_SETTLE | FOPC_ACCESS_ALL | FOPC_ACCESS_WITHDRAWN));
     } else {
         // we don't have any filtering to do, or we only filter by feeder
         vm_emit(&vm, vm_makeop(FOPC_LOAD, true));
@@ -285,11 +315,7 @@ static void parse_as_match_expr(const char *expr)
 {
     int opcode = FOPC_ASPMATCH;
 
-    if (*expr == '\0')
-        exprintf(EXIT_FAILURE, "empty AS match expression");
-
     uint32_t buf[strlen(expr) / 2 + 1];  // wild upperbound
-    int count = 0;
 
     const char *ptr = expr;
     if (*ptr == '^') {
@@ -297,73 +323,106 @@ static void parse_as_match_expr(const char *expr)
         ptr++;
     }
 
+    as_path_match_t *expr_head = NULL;
+    as_path_match_t *expr_tail = NULL;
     while (true) {
-        char *eptr;
+        // parse an AS match expressions, expressions are ANDed such as "^1 2 3 * 4 5 6 * 7$"
 
-        errno = 0;
+        int count = 0;
+        while (true) {
+            // this while parses a single expression delimited by '*'
+            char *eptr;
 
-        long long as = strtoll(ptr, &eptr, 10);
-        if (ptr == eptr) {
-            int len = ptr - expr;
-            const char *at = expr;
-            if (len == 0) {
-                at = "[expression start]";
-                len = strlen(at);
+            errno = 0;
+
+            while (isspace((unsigned char) *ptr)) ptr++;
+
+            if (*ptr == '\0')
+                break;  // it was just trash at the end of path
+
+            long long as = strtoll(ptr, &eptr, 10);
+            if (ptr == eptr) {
+                int len = ptr - expr;
+                const char *at = expr;
+                if (len == 0) {
+                    at = "[expression start]";
+                    len = strlen(at);
+                }
+
+                exprintf(EXIT_FAILURE, "%s: expecting AS number after: '%.*s'", expr, len, at);
+            }
+            if (as < 0 || as > UINT32_MAX)
+                errno = ERANGE;
+            if (errno != 0)
+                exprintf(EXIT_FAILURE, "%s: AS number '%lld':", expr, as);
+
+            ptr = eptr;
+            if (*ptr == '$') {
+                opcode = (opcode == FOPC_ASPSTARTS) ? FOPC_ASPEXACT : FOPC_ASPENDS;
+                ptr++;
+
+                if (*ptr != '\0')
+                    exprintf(EXIT_FAILURE, "%s: expecting expression end after '$'", expr);
             }
 
-            exprintf(EXIT_FAILURE, "%s: expecting AS number after: '%.*s'", expr, len, at);
-        }
-        if (as < 0 || as > UINT32_MAX)
-            errno = ERANGE;
-        if (errno != 0)
-            exprintf(EXIT_FAILURE, "%s: AS number '%lld':", expr, as);
+            buf[count++] = as;
 
-        ptr = eptr;
-        if (*ptr == '$') {
-            opcode = (opcode == FOPC_ASPSTARTS) ? FOPC_ASPEXACT : FOPC_ASPENDS;
-            ptr++;
+            if (*ptr == '\0' || *ptr == '*')
+                break;
 
-            if (*ptr != '\0')
-                exprintf(EXIT_FAILURE, "%s: expecting expression end after '$'", expr);
+            if (!isspace((unsigned char) *ptr))
+                exprintf(EXIT_FAILURE, "%s: unexpected character after '%lld' (%c)", expr, as, *ptr);
         }
 
-        buf[count++] = as;
+        if (count == 0)
+            exprintf(EXIT_FAILURE, "empty AS match expression");
+
+        // parsed one match, add it to the AND chain of the current expression
+        // we'll compile it to bytecode later
+        as_path_match_t *match = malloc(sizeof(*match) + count * sizeof(*buf));
+        if (unlikely(!match))
+            exprintf(EXIT_FAILURE, "out of memory");
+
+        // add the AS path segment to VM heap
+        intptr_t heapptr = vm_heap_alloc(&vm, count * sizeof(*buf), VM_HEAP_PERM);
+        if (unlikely(heapptr == VM_BAD_HEAP_PTR))
+            exprintf(EXIT_FAILURE, "out of memory");
+
+        memcpy(vm_heap_ptr(&vm, heapptr), buf, count * sizeof(*buf));
+
+        // generate a K constant with the heap array address
+        int kidx = vm_newk(&vm);
+
+        vm.kp[kidx].base  = heapptr;
+        vm.kp[kidx].elsiz = sizeof(*buf);
+        vm.kp[kidx].nels  = count;
+
+        // populate AS match subexpression
+        match->opcode  = opcode;
+        match->kidx    = kidx;
+        match->or_next = NULL;
+        if (expr_tail)
+            expr_tail->and_next = match;
+        else
+            expr_head = match;
+
+        expr_tail = match;
 
         if (*ptr == '\0')
-            break;
+            break;  // done parsing the entire OR-chain
 
-        if (*ptr != ',')
-            exprintf(EXIT_FAILURE, "%s: expecting comma after '%lld'", expr, as);
+        ptr++;  // skip the * and go on...
 
-        ptr++;
+        opcode = FOPC_ASPMATCH;  // reset match semantics
     }
 
-    as_path_match_t *match = malloc(sizeof(*match) + count * sizeof(*buf));
-    if (unlikely(!match))
-        exprintf(EXIT_FAILURE, "out of memory");
-
-    intptr_t heapptr = vm_heap_alloc(&vm, count * sizeof(*buf), VM_HEAP_PERM);
-    if (unlikely(heapptr == VM_BAD_HEAP_PTR))
-        exprintf(EXIT_FAILURE, "out of memory");
-
-    memcpy(vm_heap_ptr(&vm, heapptr), buf, count * sizeof(*buf));
-
-    int kidx = vm_newk(&vm);
-
-    vm.kp[kidx].base  = heapptr;
-    vm.kp[kidx].elsiz = sizeof(*buf);
-    vm.kp[kidx].nels  = count;
-
-    match->opcode = opcode;
-    match->kidx   = kidx;
-    match->next   = NULL;
-
+    // add to the global OR chain, in case more expressions are provided
     if (path_match_tail)
-        path_match_tail->next = match;
+        path_match_tail->or_next = expr_head;
     else
-        path_match_head = match;
+        path_match_head = expr_head;
 
-    path_match_tail = match;
+    path_match_tail = expr_head;
 }
 
 int main(int argc, char **argv)
@@ -561,7 +620,14 @@ int main(int argc, char **argv)
     free(peer_addrs);
     while (path_match_head) {
         as_path_match_t *t = path_match_head;
-        path_match_head = t->next;
+        while (t->and_next) {
+            as_path_match_t *tn = t->and_next;
+
+            t->and_next = tn->and_next;
+            free(tn);
+        }
+
+        path_match_head = t->or_next;
 
         free(t);
     }
