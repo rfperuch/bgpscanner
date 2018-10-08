@@ -77,13 +77,15 @@ static void usage(void)
     fprintf(stderr, "\t-I <file>\n");
     fprintf(stderr, "\t\tPrint only entries coming from the feeder IP contained in file\n");
     fprintf(stderr, "\t-l\n");
-    fprintf(stderr, "\t\tDiscard every package with an AS loop in its real AS path\n");
+    fprintf(stderr, "\t\tPrint only entries with a loop in its AS PATH\n");
     fprintf(stderr, "\t-L\n");
-    fprintf(stderr, "\t\tDiscard every package without an AS loop in its real AS path\n");
+    fprintf(stderr, "\t\tPrint only entries without a loop in its AS PATH\n");
     fprintf(stderr, "\t-o <file>\n");
     fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
-    fprintf(stderr, "\t-p <path expression>");
-    fprintf(stderr, "\t\tFilter packets by AS PATH");
+    fprintf(stderr, "\t-p <path expression>\n");
+    fprintf(stderr, "\t\tPrint only entries which AS PATH matches the expression\n");
+    fprintf(stderr, "\t-P <path expression>\n");
+    fprintf(stderr, "\t\tPrint only entries which AS PATH does not match the expression\n");
     fprintf(stderr, "\t-r <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets related to the given subnet of interest\n");
     fprintf(stderr, "\t-R <file>\n");
@@ -138,6 +140,7 @@ typedef struct as_path_match_s {
 
     bytecode_t opcode;
     int kidx;
+    bool neg;
 } as_path_match_t;
 
 static as_path_match_t *path_match_head = NULL;
@@ -337,8 +340,15 @@ static void setup_filter(void)
                 }
             }
             vm_emit(&vm, FOPC_ENDBLK);
-            if (i->or_next)                // omit the conditional on last OR term
+            if (i->neg)
+                vm_emit(&vm, FOPC_NOT);
+
+            if (i->or_next)
+                vm_emit(&vm, FOPC_CPASS);
+            /*
+            if (i->or_next) {                // omit the conditional on last OR term
                 vm_emit(&vm, FOPC_CPASS);  // if the block was successful, the entire OR succeeded
+            }*/
         }
 
         vm_emit(&vm, FOPC_ENDBLK);
@@ -398,7 +408,7 @@ static char *skip_spaces(const char* ptr)
     return (char*) ptr;
 }
 
-static void parse_as_match_expr(const char *expr)
+static void parse_as_match_expr(const char *expr, bool negate)
 {
     int opcode = FOPC_ASPMATCH;
 
@@ -501,7 +511,8 @@ static void parse_as_match_expr(const char *expr)
         vm.kp[kidx].nels  = count;
 
         match->kidx = kidx;
-
+        match->neg = negate;
+        
         match->or_next = NULL;
         if (expr_tail)
             expr_tail->and_next = match;
@@ -514,10 +525,6 @@ static void parse_as_match_expr(const char *expr)
             break;  // done parsing the entire OR-chain
 
         // reset match semantics:
-        // if we have encountered a ? (ASPSKP) then we want to threat whatever follows
-        // as an exact match with the following ASes (think about "^ 10 ? 20")
-        //
-        // if we have any other expression, then we are in a situation like "^ 10 * 20"
         opcode = FOPC_ASPMATCH;
     }
 
@@ -546,7 +553,7 @@ int main(int argc, char **argv)
     vm.funcs[MRT_FIND_AS_LOOPS_FN] = mrt_find_as_loops;
 
     // parse command line
-    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:lLo:p:R:r:S:s:U:u:")) != -1) {
+    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:lLo:p:P:R:r:S:s:U:u:")) != -1) {
         switch (c) {
         case 'a':
             if (!add_peer_as(optarg))
@@ -615,7 +622,11 @@ int main(int argc, char **argv)
             break;
 
         case 'p':
-            parse_as_match_expr(optarg);
+            parse_as_match_expr(optarg, false);
+            break;
+
+        case 'P':
+            parse_as_match_expr(optarg, true);
             break;
 
         case 'i':
