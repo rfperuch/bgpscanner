@@ -642,13 +642,13 @@ int main(int argc, char **argv)
             break;
 
         case 'l':
-            flags &= ~KEEP_AS_LOOPS;
-            flags |= DISCARD_AS_LOOPS;
+            flags &= ~DISCARD_AS_LOOPS;
+            flags |= KEEP_AS_LOOPS;
             break;
 
         case 'L':
-            flags &= ~DISCARD_AS_LOOPS;
-            flags |= KEEP_AS_LOOPS;
+            flags &= ~KEEP_AS_LOOPS;
+            flags |= DISCARD_AS_LOOPS;
             break;
 
         case '?':
