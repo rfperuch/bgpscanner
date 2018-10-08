@@ -129,7 +129,7 @@ typedef struct as_path_match_s {
     struct as_path_match_s *or_next;  // next match in OR-ed chain
     struct as_path_match_s *and_next; // next match in AND chain
 
-    int opcode;
+    bytecode_t opcode;
     int kidx;
 } as_path_match_t;
 
@@ -311,78 +311,111 @@ static void setup_filter(void)
     }
 }
 
+static int iswildcard(char c)
+{
+    return c == '*' || c == '?';
+}
+
+static int isdelim(char c)
+{
+    return isspace((unsigned char) c) || c == '$' || c == '\0' || c == '^';
+}
+
+static char *skip_spaces(const char* ptr)
+{
+    while (isspace((unsigned char) *ptr)) ptr++;
+
+    return (char*) ptr;
+}
+
 static void parse_as_match_expr(const char *expr)
 {
     int opcode = FOPC_ASPMATCH;
 
-    uint32_t buf[strlen(expr) / 2 + 1];  // wild upperbound
+    wide_as_t buf[strlen(expr) / 2 + 1];  // wild upperbound
 
-    const char *ptr = expr;
+    const char *ptr = skip_spaces(expr);
     if (*ptr == '^') {
         opcode = FOPC_ASPSTARTS;
-        ptr++;
+        ptr = skip_spaces(ptr + 1);
     }
 
     as_path_match_t *expr_head = NULL;
     as_path_match_t *expr_tail = NULL;
     while (true) {
-        // parse an AS match expressions, expressions are ANDed such as "^1 2 3 * 4 5 6 * 7$"
+        // parse an AS match expressions, expressions are ANDed such as "^1 2 3 * 4 ? ? 5 6 * 7$"
 
         int count = 0;
         while (true) {
-            // this while parses a single expression delimited by '*'
-            char *eptr;
-
+            // this splits the full expressions into subexpressions
+            // ptr *DOES NOT* reference a space here!
             errno = 0;
 
-            while (isspace((unsigned char) *ptr)) ptr++;
-
             if (*ptr == '\0')
-                break;  // it was just trash at the end of path
+                break;  // we're done
+            if (iswildcard(*ptr) && !isdelim(*(ptr + 1)))
+                exprintf(EXIT_FAILURE, "%s: wildcard '%c' must be delimiter separated", expr, *ptr);
 
-            long long as = strtoll(ptr, &eptr, 10);
-            if (ptr == eptr) {
-                int len = ptr - expr;
-                const char *at = expr;
-                if (len == 0) {
-                    at = "[expression start]";
-                    len = strlen(at);
-                }
-
-                exprintf(EXIT_FAILURE, "%s: expecting AS number after: '%.*s'", expr, len, at);
+            if (*ptr == '*') {
+                // flush operations at this point
+                ptr = skip_spaces(ptr + 1);
+                break;
             }
-            if (as < 0 || as > UINT32_MAX)
-                errno = ERANGE;
-            if (errno != 0)
-                exprintf(EXIT_FAILURE, "%s: AS number '%lld':", expr, as);
 
-            ptr = eptr;
+            long long as;
+            if (*ptr == '?') {
+                as = AS_ANY;
+                ptr++;
+            } else {
+                char* eptr;
+
+                as = strtoll(ptr, &eptr, 10);
+                if (ptr == eptr) {
+                    int len = ptr - expr;
+                    const char *at = expr;
+                    if (len == 0) {
+                        at = "[expression start]";
+                        len = strlen(at);
+                    }
+
+                    exprintf(EXIT_FAILURE, "%s: expecting AS number after: '%.*s'", expr, len, at);
+                }
+                if (as < 0 || as > UINT32_MAX)
+                    errno = ERANGE;
+                if (errno != 0)
+                    exprintf(EXIT_FAILURE, "%s: AS number '%lld':", expr, as);
+
+                ptr = eptr;
+            }
+
+            // buffer the AS
+            buf[count++] = as;
+            // ... and position to the next token
+            ptr = skip_spaces(ptr);
+
             if (*ptr == '$') {
                 opcode = (opcode == FOPC_ASPSTARTS) ? FOPC_ASPEXACT : FOPC_ASPENDS;
-                ptr++;
-
+                ptr = skip_spaces(ptr + 1);
                 if (*ptr != '\0')
                     exprintf(EXIT_FAILURE, "%s: expecting expression end after '$'", expr);
             }
-
-            buf[count++] = as;
-
-            if (*ptr == '\0' || *ptr == '*')
-                break;
-
-            if (!isspace((unsigned char) *ptr))
-                exprintf(EXIT_FAILURE, "%s: unexpected character after '%lld' (%c)", expr, as, *ptr);
         }
 
-        if (count == 0)
+        if (count == 0) {
+            if (*ptr == '$')
+                break; // expression with a terminating ?
+
             exprintf(EXIT_FAILURE, "empty AS match expression");
+        }
 
         // parsed one match, add it to the AND chain of the current expression
         // we'll compile it to bytecode later
-        as_path_match_t *match = malloc(sizeof(*match) + count * sizeof(*buf));
+        as_path_match_t *match = malloc(sizeof(*match));
         if (unlikely(!match))
             exprintf(EXIT_FAILURE, "out of memory");
 
+        // populate AS match subexpression
+        match->opcode = opcode;
         // add the AS path segment to VM heap
         intptr_t heapptr = vm_heap_alloc(&vm, count * sizeof(*buf), VM_HEAP_PERM);
         if (unlikely(heapptr == VM_BAD_HEAP_PTR))
@@ -397,9 +430,8 @@ static void parse_as_match_expr(const char *expr)
         vm.kp[kidx].elsiz = sizeof(*buf);
         vm.kp[kidx].nels  = count;
 
-        // populate AS match subexpression
-        match->opcode  = opcode;
-        match->kidx    = kidx;
+        match->kidx = kidx;
+
         match->or_next = NULL;
         if (expr_tail)
             expr_tail->and_next = match;
@@ -411,9 +443,12 @@ static void parse_as_match_expr(const char *expr)
         if (*ptr == '\0')
             break;  // done parsing the entire OR-chain
 
-        ptr++;  // skip the * and go on...
-
-        opcode = FOPC_ASPMATCH;  // reset match semantics
+        // reset match semantics:
+        // if we have encountered a ? (ASPSKP) then we want to threat whatever follows
+        // as an exact match with the following ASes (think about "^ 10 ? 20")
+        //
+        // if we have any other expression, then we are in a situation like "^ 10 * 20"
+        opcode = FOPC_ASPMATCH;
     }
 
     // add to the global OR chain, in case more expressions are provided
@@ -428,7 +463,6 @@ static void parse_as_match_expr(const char *expr)
 int main(int argc, char **argv)
 {
     int c;
-
     setprogramnam(argv[0]);
 
     // setup VM environment
