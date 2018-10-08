@@ -76,6 +76,10 @@ static void usage(void)
     fprintf(stderr, "\t\tPrint only entries coming from a given feeder IP\n");
     fprintf(stderr, "\t-I <file>\n");
     fprintf(stderr, "\t\tPrint only entries coming from the feeder IP contained in file\n");
+    fprintf(stderr, "\t-l\n");
+    fprintf(stderr, "\t\tDiscard every package with an AS loop in its real AS path\n");
+    fprintf(stderr, "\t-L\n");
+    fprintf(stderr, "\t\tDiscard every package without an AS loop in its real AS path\n");
     fprintf(stderr, "\t-o <file>\n");
     fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
     fprintf(stderr, "\t-p <path expression>");
@@ -105,8 +109,11 @@ enum {
     FILTER_RELATED      = 1 << 6,
     FILTER_BY_SUBNET    = 1 << 7,
     FILTER_BY_SUPERNET  = 1 << 8,
+    KEEP_AS_LOOPS       = 1 << 9,
+    DISCARD_AS_LOOPS    = 1 << 10,
 
-    FILTER_MASK = (FILTER_EXACT | FILTER_RELATED | FILTER_BY_SUBNET | FILTER_BY_SUPERNET)
+    FILTER_MASK  = (FILTER_EXACT | FILTER_RELATED | FILTER_BY_SUBNET | FILTER_BY_SUPERNET),
+    AS_LOOP_MASK = KEEP_AS_LOOPS | DISCARD_AS_LOOPS
 };
 
 enum {
@@ -242,6 +249,59 @@ static void mrt_accumulate_ases(filter_vm_t *vm)
         vm_pushas(vm, peer_ases[i]);
 }
 
+enum {
+    ASPATHSIZ = 32
+};
+
+static void mrt_find_as_loops(filter_vm_t *vm)
+{
+
+    vm_exec_settle(vm);  // force iterators settle (not really necessary... but whatever)
+
+    int max        = 0;
+    int n          = 0;
+    intptr_t vaddr = 0;
+    uint32_t *path = NULL;
+
+    startrealaspath_r(vm->bgp);
+
+    as_pathent_t *ent;
+    while ((ent = nextaspath_r(vm->bgp)) != NULL) {
+        if (unlikely(n == max)) {
+            max += ASPATHSIZ;
+
+            vaddr = vm_heap_grow(vm, vaddr, max * sizeof(*path));
+            if (unlikely(vaddr == VM_BAD_HEAP_PTR))
+                vm_abort(vm, VM_OUT_OF_MEMORY);
+
+            path = vm_heap_ptr(vm, vaddr);  // update pointer
+        }
+        path[n++] = ent->as;
+    }
+
+    if (endaspath_r(vm->bgp) != BGP_ENOERR)
+        vm_abort(vm, VM_BAD_PACKET);
+
+    int has_loop = false;
+    for (int i = 2; i < n - 1 && !has_loop; i++) {
+        if (path[i] == path[i - 1])
+            continue;  // prepending
+        if (path[i] == AS_TRANS)
+            continue;
+
+        for (int j = 0; j < i - 2; j++) {
+            if (path[j] == path[i] && path[j] != AS_TRANS) {
+                has_loop = true;
+                break;
+            }
+        }
+    }
+
+    vm_heap_return(vm, max * sizeof(*path));  // don't need temporary memory anymore
+
+    vm_pushvalue(vm, has_loop);
+}
+
 static void setup_filter(void)
 {
     if (flags & FILTER_BY_PEER_AS) {
@@ -302,13 +362,23 @@ static void setup_filter(void)
         if (flags & FILTER_BY_SUPERNET)
             opcode = FOPC_SUPERNET;
 
+        vm_emit(&vm, FOPC_BLK);
         vm_emit(&vm, vm_makeop(opcode, FOPC_ACCESS_SETTLE | FOPC_ACCESS_ALL | FOPC_ACCESS_NLRI));
         vm_emit(&vm, FOPC_CPASS);
         vm_emit(&vm, vm_makeop(opcode, FOPC_ACCESS_SETTLE | FOPC_ACCESS_ALL | FOPC_ACCESS_WITHDRAWN));
-    } else {
-        // we don't have any filtering to do, or we only filter by feeder
-        vm_emit(&vm, vm_makeop(FOPC_LOAD, true));
+        vm_emit(&vm, FOPC_ENDBLK);
+        vm_emit(&vm, FOPC_NOT);
+        vm_emit(&vm, FOPC_CFAIL);
     }
+    if (flags & AS_LOOP_MASK) {
+        // also call the AS loop filtering logic...
+        vm_emit(&vm, vm_makeop(FOPC_CALL, MRT_FIND_AS_LOOPS_FN));
+        if (flags & KEEP_AS_LOOPS)
+            vm_emit(&vm, FOPC_NOT);
+
+        vm_emit(&vm, FOPC_CFAIL);
+    }
+    vm_emit(&vm, vm_makeop(FOPC_LOAD, true));
 }
 
 static int iswildcard(char c)
@@ -473,9 +543,10 @@ int main(int argc, char **argv)
 
     vm.funcs[MRT_ACCUMULATE_ADDRS_FN] = mrt_accumulate_addrs;
     vm.funcs[MRT_ACCUMULATE_ASES_FN]  = mrt_accumulate_ases;
+    vm.funcs[MRT_FIND_AS_LOOPS_FN] = mrt_find_as_loops;
 
     // parse command line
-    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:o:p:R:r:S:s:U:u:")) != -1) {
+    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:lLo:p:R:r:S:s:U:u:")) != -1) {
         switch (c) {
         case 'a':
             if (!add_peer_as(optarg))
@@ -557,6 +628,16 @@ int main(int argc, char **argv)
         case 'I':
             parse_file(optarg, add_peer_address);
             flags |= FILTER_BY_PEER_ADDR;
+            break;
+
+        case 'l':
+            flags &= ~KEEP_AS_LOOPS;
+            flags |= DISCARD_AS_LOOPS;
+            break;
+
+        case 'L':
+            flags &= ~DISCARD_AS_LOOPS;
+            flags |= KEEP_AS_LOOPS;
             break;
 
         case '?':

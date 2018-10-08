@@ -39,10 +39,12 @@ enum {
     K_PEER_ADDR
 };
 
-// filtering functions to fill the stack with peer addresses and ASes
 enum {
+    // filtering functions to fill the stack with peer addresses and ASes
     MRT_ACCUMULATE_ADDRS_FN,
-    MRT_ACCUMULATE_ASES_FN
+    MRT_ACCUMULATE_ASES_FN,
+    // returns true if AS path contains loops, false otherwise
+    MRT_FIND_AS_LOOPS_FN
 };
 
 int mrtprintpeeridx(const char *filename, io_rw_t *rw, filter_vm_t *vm);
