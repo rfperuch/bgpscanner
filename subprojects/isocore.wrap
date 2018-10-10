@@ -1,6 +1,6 @@
 [wrap-git]
 directory=isocore
-url=Ilum:~/GIT_repositories/isocore
+url=git@gitlab.com:Isolario/isocore.git
 revision=master
-push-url=Ilum:~/GIT_repositories/isocore
+push-url=git@gitlab.com:Isolario/isocore.git
 
