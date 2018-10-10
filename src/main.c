@@ -54,10 +54,10 @@ static void usage(void)
 {
     fprintf(stderr, "%s: The Isolario MRT data reader utility\n", programnam);
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-d] [-p PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-o FILE] [FILE...]\n", programnam);
     fprintf(stderr, "\n");
     fprintf(stderr, "Available options:\n");
     fprintf(stderr, "\t-a <feeder AS>\n");
