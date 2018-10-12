@@ -1,6 +1,6 @@
 [wrap-git]
 directory=cbench
-url=https://gitlab.com/AlphaCogs/cbench
+url=https://gitlab.com/AlphaCogs/cbench.git
 revision=head
 push-url=git@gitlab.com:AlphaCogs/cbench.git
 
