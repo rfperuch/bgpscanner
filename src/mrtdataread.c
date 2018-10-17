@@ -47,7 +47,7 @@
 #include "mrtdataread.h"
 
 enum {
-    MAX_PEERREF_BITSET_SIZE = UINT16_MAX / (sizeof(unsigned int) * CHAR_BIT)
+    MAX_PEERREF_BITSET_SIZE = UINT16_MAX / (sizeof(uint32_t) * CHAR_BIT)
 };
 
 static bool seen_ribpi;
@@ -86,7 +86,7 @@ static void report_bad_rib(const char *filename, int err, const rib_header_t *ri
     fputc('\n', stderr);
 }
 
-static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm)
+static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
 {
     size_t n;
     void *data;
@@ -146,8 +146,11 @@ static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_v
             if (res < 0 && res != VM_BAD_PACKET)
                 exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
         }
-        if (res > 0)
-            printbgp(stdout, "F*T", &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+        if (res > 0) {
+            const char *fmt = (format == MRT_DUMP_CHEX) ? "xF*T" : "rF*T";
+
+            printbgp(stdout, fmt, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+        }
 
         err = close_bgp_packet(filename);
         break;
@@ -183,7 +186,7 @@ static int ispeeridxref(uint16_t idx)
     return peerrefs[idx >> PEERREF_SHIFT] & (1 << (idx & PEERREF_MASK));
 }
 
-static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, int mode)
+static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
 {
     const rib_header_t *ribhdr;
     const rib_entry_t *rib;
@@ -222,7 +225,7 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
 
             // we want to avoid rebuilding a BGP packet in case we don't want to dump it
             // or we don't want to filter it (think about a peer-index dump without any filtering)
-            if (mode == DUMP_RIBS || !istrivialfilter(vm)) {
+            if (format != MRT_NO_DUMP || !istrivialfilter(vm)) {
                 vm->kp[K_PEER_AS].as = rib->peer->as;
                 memcpy(&vm->kp[K_PEER_ADDR].addr, &rib->peer->addr, sizeof(vm->kp[K_PEER_ADDR].addr));
 
@@ -252,8 +255,11 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
 
             if (res > 0) {
                 refpeeridx(rib->peer_idx);
-                if (mode == DUMP_RIBS)
-                    printbgp(stdout, "#F*t", &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
+                if (format != MRT_NO_DUMP) {
+                    const char *fmt = (format == MRT_DUMP_ROW) ? "#rF*t" : "#xF*t";
+
+                    printbgp(stdout, fmt, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, rib->originated);
+                }
             }
 
             if (must_close_bgp)
@@ -286,7 +292,7 @@ int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
 
         const mrt_header_t *hdr = getmrtheader();
         if (hdr != NULL && hdr->type == MRT_TABLE_DUMPV2) {
-            if (!processtabledumpv2(filename, hdr, vm, DONT_DUMP_RIBS)) {
+            if (!processtabledumpv2(filename, hdr, vm, MRT_NO_DUMP)) {
                 retval = -1;
                 goto done;
             }
@@ -316,6 +322,7 @@ int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
 done:
 
     if (seen_ribpi)
+
         mrtclosepi();
 
     if (rw->error(rw)) {
@@ -326,7 +333,7 @@ done:
     return retval;
 }
 
-int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm)
+int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm, mrt_dump_fmt_t format)
 {
     seen_ribpi = false;
     pkgseq     = 0;
@@ -342,7 +349,7 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm)
         if (hdr != NULL) {
             switch (hdr->type) {
             case MRT_TABLE_DUMPV2:
-                if (!processtabledumpv2(filename, hdr, vm, DUMP_RIBS)) {
+                if (!processtabledumpv2(filename, hdr, vm, format)) {
                     retval = -1;
                     goto done;
                 }
@@ -351,7 +358,7 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm)
 
             case MRT_BGP4MP:
             case MRT_BGP4MP_ET:
-                if (!processbgp4mp(filename, hdr, vm)) {
+                if (!processbgp4mp(filename, hdr, vm, format)) {
                     retval = -1;
                     goto done;
                 }

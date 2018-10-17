@@ -54,16 +54,18 @@ static void usage(void)
 {
     fprintf(stderr, "%s: The Isolario MRT data reader utility\n", programnam);
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-dlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
     fprintf(stderr, "\n");
     fprintf(stderr, "Available options:\n");
     fprintf(stderr, "\t-a <feeder AS>\n");
     fprintf(stderr, "\t\tPrint only entries coming from the given feeder AS\n");
     fprintf(stderr, "\t-A <file>\n");
     fprintf(stderr, "\t\tPrint only entries coming from the feeder ASes contained in file\n");
+    fprintf(stderr, "\t-c\n");
+    fprintf(stderr, "\t\tDump packets in hexadecimal C array format\n");
     fprintf(stderr, "\t-d\n");
     fprintf(stderr, "\t\tDump packet filter bytecode to stderr (debug option)\n");
     fprintf(stderr, "\t-e <subnet>\n");
@@ -94,6 +96,10 @@ static void usage(void)
     fprintf(stderr, "\t\tPrint only entries containing subnets included to the given subnet of interest\n");
     fprintf(stderr, "\t-S <file>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets included to the subnets of interest contained in file\n");
+    fprintf(stderr, "\t-t <attribute code>\n");
+    fprintf(stderr, "\t\tPrint only entries containing the attribute of interest\n");
+    fprintf(stderr, "\t-T <file>\n");
+    fprintf(stderr, "\t\tPrint only entries containing the attributes of interest contained in file\n");
     fprintf(stderr, "\t-u <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets including (or equal) to the given subnet of interest\n");
     fprintf(stderr, "\t-U <file>\n");
@@ -133,6 +139,21 @@ static int ases_siz          = 0;
 static netaddr_t *peer_addrs = NULL;
 static int addrs_count       = 0;
 static int addrs_siz         = 0;
+static mrt_dump_fmt_t format = MRT_DUMP_ROW;
+
+// attribute of interest mask, only meaningful if attr_count > 0
+
+enum {
+    MAX_ATTRS_BITSET_SIZE = 0xff / (sizeof(uint32_t) * CHAR_BIT)
+};
+
+enum {
+    ATTR_BITSET_SHIFT = 5,
+    ATTR_BITSET_MASK  = 0x1f
+};
+
+static uint32_t attr_mask[MAX_ATTRS_BITSET_SIZE];
+static int attr_count = 0;
 
 typedef struct as_path_match_s {
     struct as_path_match_s *or_next;  // next match in OR-ed chain
@@ -219,6 +240,80 @@ static int add_peer_address(const char *s)
     return true;
 }
 
+static int add_interesting_attr(const char *s)
+{
+    static const struct {
+        const char *name;
+        int code;
+    } attr_tab[] = {
+        { "ORIGIN", ORIGIN_CODE },
+        { "AS_PATH", AS_PATH_CODE },
+        { "NEXT_HOP", NEXT_HOP_CODE },
+        { "MULTI_EXIT_DISC", MULTI_EXIT_DISC_CODE },
+        { "LOCAL_PREF", LOCAL_PREF_CODE },
+        { "ATOMIC_AGGREGATE", ATOMIC_AGGREGATE_CODE },
+        { "AGGREGATOR", AGGREGATOR_CODE },
+        { "COMMUNITY", COMMUNITY_CODE },
+        { "ORIGINATOR_ID", ORIGINATOR_ID_CODE },
+        { "CLUSTER_LIST", CLUSTER_LIST_CODE },
+        { "DPA", DPA_CODE },
+        { "ADVERTISER", ADVERTISER_CODE },
+        { "RCID_PATH_CLUSTER_ID", RCID_PATH_CLUSTER_ID_CODE },
+        { "MP_REACH_NLRI", MP_REACH_NLRI_CODE },
+        { "MP_UNREACH_NLRI_CODE", MP_UNREACH_NLRI_CODE },
+        { "EXTENDED_COMMUNITY", EXTENDED_COMMUNITY_CODE },
+        { "AS4_PATH", AS4_PATH_CODE },
+        { "AS4_AGGREGATOR", AS4_AGGREGATOR_CODE },
+        { "SAFI_SSA", SAFI_SSA_CODE },
+        { "CONNECTOR", CONNECTOR_CODE },
+        { "AS_PATHLIMIT", AS_PATHLIMIT_CODE },
+        { "PMSI_TUNNEL", PMSI_TUNNEL_CODE },
+        { "TUNNEL_ENCAPSULATION", TUNNEL_ENCAPSULATION_CODE },
+        { "TRAFFIC_ENGINEERING", TRAFFIC_ENGINEERING_CODE },
+        { "IPV6_ADDRESS_SPECIFIC_EXTENDED_COMMUNITY", IPV6_ADDRESS_SPECIFIC_EXTENDED_COMMUNITY_CODE },
+        { "AIGP", AIGP_CODE },
+        { "PE_DISTINGUISHER_LABELS", PE_DISTINGUISHER_LABELS_CODE },
+        { "BGP_ENTROPY_LEVEL_CAPABILITY", BGP_ENTROPY_LEVEL_CAPABILITY_CODE },
+        { "BGP_LS", BGP_LS_CODE },
+        { "LARGE_COMMUNITY", LARGE_COMMUNITY_CODE },
+        { "BGPSEC_PATH", BGPSEC_PATH_CODE },
+        { "BGP_COMMUNITY_CONTAINER", BGP_COMMUNITY_CONTAINER_CODE },
+        { "BGP_PREFIX_SID", BGP_PREFIX_SID_CODE },
+        { "ATTR_SET", ATTR_SET_CODE },
+        { "RESERVED", RESERVED_CODE },
+        { NULL, ATTR_BAD_CODE}
+    };
+
+    int code = ATTR_BAD_CODE;
+
+    for (int i = 0; attr_tab[i].name != NULL; i++) {
+        if (strcasecmp(attr_tab[i].name, s) == 0) {
+            code = attr_tab[i].code;
+            break;
+        }
+    }
+
+    if (code == ATTR_BAD_CODE) {
+        char *end;
+
+        errno = 0;
+
+        long long val = strtoll(s, &end, 10);
+        if (val < 0 || val > 0xff)
+            errno = ERANGE;
+        if (end == s || errno != 0)
+            return false;
+
+        code = val;
+    }
+
+    if ((attr_mask[code >> ATTR_BITSET_SHIFT] & (1 << (code & ATTR_BITSET_MASK))) == 0) {
+        attr_mask[code >> ATTR_BITSET_SHIFT] |= 1 << (code & ATTR_BITSET_MASK);
+        attr_count++;
+    }
+    return true;
+}
+
 static void parse_file(const char *filename, int (*read_callback)(const char *))
 {
     FILE *f = fopen(filename, "r");
@@ -231,7 +326,7 @@ static void parse_file(const char *filename, int (*read_callback)(const char *))
     char *tok;
     while ((tok = parse(f)) != NULL) {
         if (!read_callback(tok))
-            parsingerr("bad address: %s", tok);
+            parsingerr("bad entry: %s", tok);
     }
 
     setperrcallback(NULL);
@@ -316,6 +411,25 @@ static void setup_filter(void)
     if (flags & FILTER_BY_PEER_ADDR) {
         vm_emit(&vm, vm_makeop(FOPC_CALL, MRT_ACCUMULATE_ADDRS_FN));
         vm_emit(&vm, vm_makeop(FOPC_ADDRCONTAINS, K_PEER_ADDR));
+        vm_emit(&vm, FOPC_NOT);
+        vm_emit(&vm, FOPC_CFAIL);
+    }
+    if (attr_count > 0) {
+        // filter by attribute of interest
+        int n = 0;
+
+        vm_emit(&vm, FOPC_BLK);
+        for (int i = 0; i < 256 && n < attr_count; i++) {
+            if (attr_mask[i >> ATTR_BITSET_SHIFT] & (1 << (i & ATTR_BITSET_MASK))) {
+                vm_emit(&vm, vm_makeop(FOPC_HASATTR, i));
+                n++;
+
+                if (n < attr_count)
+                    vm_emit(&vm, FOPC_CPASS);
+            }
+        }
+
+        vm_emit(&vm, FOPC_ENDBLK);
         vm_emit(&vm, FOPC_NOT);
         vm_emit(&vm, FOPC_CFAIL);
     }
@@ -553,7 +667,7 @@ int main(int argc, char **argv)
     vm.funcs[MRT_FIND_AS_LOOPS_FN] = mrt_find_as_loops;
 
     // parse command line
-    while ((c = getopt(argc, argv, "A:a:dE:e:fi:I:lLo:p:P:R:r:S:s:U:u:")) != -1) {
+    while ((c = getopt(argc, argv, "A:a:cdE:e:fi:I:lLo:p:P:R:r:S:s:t:T:U:u:")) != -1) {
         switch (c) {
         case 'a':
             if (!add_peer_as(optarg))
@@ -565,6 +679,10 @@ int main(int argc, char **argv)
         case 'A':
             parse_file(optarg, add_peer_as);
             flags |= FILTER_BY_PEER_AS;
+            break;
+
+        case 'c':
+            format = MRT_DUMP_CHEX;
             break;
 
         case 'd':
@@ -651,6 +769,16 @@ int main(int argc, char **argv)
             flags |= DISCARD_AS_LOOPS;
             break;
 
+        case 't':
+            if (!add_interesting_attr(optarg))
+                exprintf(EXIT_FAILURE, "'%s': bad attribute code", optarg);
+
+            break;
+
+        case 'T':
+            parse_file(optarg, add_interesting_attr);
+            break;
+
         case '?':
         default:
             usage();
@@ -731,7 +859,7 @@ int main(int argc, char **argv)
         if (flags & ONLY_PEERS)
             res = mrtprintpeeridx(argv[i], iop, &vm);
         else
-            res = mrtprocess(argv[i], iop, &vm);
+            res = mrtprocess(argv[i], iop, &vm, format);
 
         if (res != 0)
             nerrors++;

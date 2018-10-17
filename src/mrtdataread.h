@@ -47,9 +47,15 @@ enum {
     MRT_FIND_AS_LOOPS_FN
 };
 
+typedef enum {
+    MRT_NO_DUMP   = '\0',
+    MRT_DUMP_CHEX = 'x',
+    MRT_DUMP_ROW  = 'r'
+} mrt_dump_fmt_t;
+
 int mrtprintpeeridx(const char *filename, io_rw_t *rw, filter_vm_t *vm);
 
-int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm);
+int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm, mrt_dump_fmt_t format);
 
 #endif
 
