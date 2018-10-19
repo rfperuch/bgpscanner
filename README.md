@@ -51,7 +51,7 @@ For Ubuntu and Debian Based System
 First make sure you have git and meson installed (If not please install them)
 
 ```bash
-$ sudo apt install git meson-build
+$ sudo apt install git meson
 ```
 
 Make sure to install the necessary dependencies to build the isocore Isolario
