@@ -51,28 +51,28 @@ For Ubuntu and Debian Based System
 First make sure you have git and meson installed (If not please install them)
 
 ```bash
-sudo apt install git meson-build
+$ sudo apt install git meson-build
 ```
 
 Make sure to install the necessary dependencies to build the isocore Isolario
 BGP and MRT library:
 
 ```bash
-sudo apt install zlib1g-dev libbz2-dev liblzma-dev liblz4-dev
+$ sudo apt install zlib1g-dev libbz2-dev liblzma-dev liblz4-dev
 ```
 
 Now, let's clone the repository and build it:
 
 ```bash
-git clone https://gitlab.com/Isolario/bgpscanner.git
-cd bgpscanner
-mkdir build && cd build
-meson --buildtype=release ..
-ninja
+$ git clone https://gitlab.com/Isolario/bgpscanner.git
+$ cd bgpscanner
+$ mkdir build && cd build
+$ meson --buildtype=release ..
+$ ninja
 ```
 
 If you need to install BGP Scanner globally
 
 ```
-sudo ninja install
+$ sudo ninja install
 ```
