@@ -73,6 +73,6 @@ $ ninja
 
 If you need to install BGP Scanner globally
 
-```
+```bash
 $ sudo ninja install
 ```
