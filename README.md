@@ -31,7 +31,7 @@ enable the *release* build type, like this:
 
 ```bash
 $ git clone https://gitlab.com/Isolario/bgpscanner.git
-$ cd build
+$ cd bgpscanner
 $ mkdir build && cd build
 $ meson --builtype=release ..
 $ ninja
