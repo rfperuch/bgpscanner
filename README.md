@@ -67,7 +67,7 @@ Now, let's clone the repository and build it:
 $ git clone https://gitlab.com/Isolario/bgpscanner.git
 $ cd bgpscanner
 $ mkdir build && cd build
-$ meson -Dbuildtype=release ..
+$ meson --buildtype=release ..
 $ ninja
 ```
 
