@@ -40,7 +40,7 @@ $ ninja
 Or run the following inside the build directory
 
 ```bash
-$ meson configure -Dbuiltype=release
+$ meson configure -Dbuildtype=release
 $ ninja
 ```
 
