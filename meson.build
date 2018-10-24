@@ -1,5 +1,5 @@
 project('bgpscanner', 'c', version : '2.31',
-                          meson_version : '>=0.45.0',
+                          meson_version : '>=0.47.0',
                           license : 'BSD3',
                           default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
 
@@ -23,3 +23,5 @@ bgpscanner = executable('bgpscanner',
     dependencies : [ isocore_dep, threads_dep ],
     install : true
 )
+
+install_man('bgpscanner.1')
