@@ -1,0 +1,350 @@
+.TH BGPSCANNER 1 2018-10-23 BGPSCANNER "User Commands"
+.SH NAME
+bgpscanner \- scan MRT dumps and filter their content.
+.
+.SH SYNOPSIS
+\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-e \fIPREFIX\fR ] [ \-E \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+[ \fIFILE\fR... ]
+.br
+\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-s \fIPREFIX\fR ] [ \-S \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+[ \fIFILE\fR... ]
+.br
+\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-u \fIPREFIX\fR ] [ \-U \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+[ \fIFILE\fR... ]
+.br
+\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-r \fIPREFIX\fR ] [ \-R \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+[ \fIFILE\fR... ]
+.
+.SH DESCRIPTION
+.B bgpscanner
+is a performance oriented utility to parse MRT RIB
+snapshots and updates, with filtering capability.
+The
+.B bgpscanner
+utility reads one or more MRT snapshot or updates, applies a set of filtering
+rules to every packet and dumps each one of them respecting the specified criteria in a human
+readable format. Packets discarded by the rules are not printed.
+By default,
+.B bgpscanner
+reads the data from its standard input and dumps to the
+standard output, and performs no filtering.
+This behavior can be changed with the appropriate arguments.
+While reading each MRT dump,
+.B bgpscanner
+reconstructs the original BGP packet sequence and applies the filtering rules to each one of them.
+The filtering process is divided in different phases:
+.IP
+.PD 0
+.IP 1 5
+Filtering by feeder, which may discard a packet based on the feeder that announce
+.IP 2 5
+Filtering by attributes, which may discard a packet based on the presence of specific attributes of interest.
+.IP 3 5
+Filtering by AS PATH, which may discard a packet based on the routes it contains.
+.IP 4 5
+Filtering by networks, which may discard a packet based on the networks contained in its NLRI and WITHDRAWN fields.
+.PD
+.PP
+The phases are applied in sequence, and multiple criteria may be specified for each one of them, resulting
+in ORing toghether multiple conditions. See the \fBEXAMPLE\fR section for examples of such logic.
+.
+.PD
+.PP
+.SS Options
+.TP
+.B \-a <feeder AS>
+Print only entries coming from the given feeder AS.
+.TP
+.B -A <file>
+Print only entries coming from the feeder ASes contained in a template file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.TP
+.B -c
+Dump packets in hexadecimal C array format, with 80 columns line wrapping.
+.TP
+.B \-d
+Debug option, dumps filtering engine bytecode to standard error in human readable format.
+.TP
+.B \-e <subnet>
+Print only entries containing the exact given subnet of interest.
+.TP
+.B \-E <file>
+Print only entries containing the exact subnets of interest contained in file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.TP
+.B \-f
+Print only every feeder IP in the RIB provided.
+.TP
+.B \-i <feeder IP>
+Print only entries coming from a given feeder IP.
+.TP
+.B \-I <file>
+Print only entries coming from the feeder IP contained in file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.TP
+.B \-l
+Print only entries containing loops in their AS PATH.
+.TP
+.B \-L
+Print only entries without a loop in their AS PATH.
+.TP
+.B \-o <file>
+Define the output file to store information (defaults to standard output).
+.TP
+.B \-p <path expression>
+Print only entries which AS PATH matches the provided expression.
+This option accepts expressions in a heavily simplified format resembling POSIX regular expressions.
+See section \fBAS PATH MATCH EXPRESSIONS\fR for more informations on the accepted expression format.
+.TP
+.B \-P <path expression>
+Same as
+.B \-p
+, but only prints entries which AS PATH does \fBnot\fR match the provided expression.
+.TP
+.B \-r <subnet>
+Print only entries containing subnets related to the given subnet of interest.
+.TP
+.B \-R <file>
+Print only entries containing subnets related to the subnets of interest contained in file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.TP
+.B \-s <subnet>
+Print only entries containing subnets included to the given subnet of interest.
+.TP
+.B \-S <file>
+Print only entries containing subnets included to the subnets of interest contained in file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.TP
+.B \-t <attribute code>
+Print only entries containing the attribute of interest.
+The accepted format to specify an attribute code may be either a straight numeric code, or
+a string representation such as
+.B AS_PATH
+to signify the attribute code 2.
+.TP
+.B \-T <file>
+Print only entries containing the attributes of interest contained in file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.TP
+.B \-u <subnet>
+Print only entries containing subnets including (or equal) to the given subnet of interest.
+.TP
+.B \-U <file>
+Print only entries containing subnets including (or equal) to the subnets of interest contained in file,
+see \fBFILTER TEMPLATE FILES\fR section for file format details.
+.
+.PD
+.PP
+.SS Operands
+The following operands are supported:
+.TP
+.B FILE
+A pathname of an input file. If no file operands are specified, the standard input is used.
+If a file is '-',
+.B bgpscanner
+shall read from the standard input at that point in the sequence.
+.B bgpscanner
+does not close and reopen standard input when it is referenced in this way, but accepts multiple occurrences of '-' as a file operand.
+See the \fBINPUT FILES\fR section for details on the supported file formats.
+.
+.PD
+.PP
+.SS Exit Status
+The following exit values are returned:
+.TP
+.B 0
+All input data was scanned successfully, file operands contained no errors and output has been produced correctly.
+.TP
+.B >0
+Errors were detected in input data, an write error occurred, or an unexpected error occurred (such as out of memory errors).
+.
+.PD
+.PP
+.SH STDIN
+The standard input shall be used only if no file operands are specified, or if a file operand is '\-'.
+Note that whenever \fBbgpscanner\fR reads from standard input, the input data is assumed to be uncompressed, whereas input files may come
+in compressed formats. See the \fBINPUT FILES\fR section.
+.
+.PD
+.PP
+.SH INPUT FILES
+.B bgpscanner
+supports the most common MRT dump formats, either in raw uncompressed form, or compressed using
+.IR gzip (1)
+,
+.IR bzip2 (1)
+or
+.IR xz (1)
+performing the appropriate decompression on the fly.
+The pathname extension is used to determine the compression algorithm.
+.
+.PD
+.SH STDOUT
+The standard output shall contain the sequence of bytes read from the input files.
+Nothing else shall be written to the standard output.
+If the standard output is a regular file, and is the same file as any of the input file operands, the implementation may treat this as an error.
+.
+.PD
+.SH STDERR
+The standard error is used only for diagnostic messages and error reporting.
+Any packet dumping happens exclusively on standard output.
+.
+.PD
+.PP
+.SH AS PATH MATCH EXPRESSIONS
+AS PATH match expressions (accepted by
+.B \-p
+and
+.B \-P
+options) are defined by a simplified format
+based on typical conventions estabilished by the POSIX regular expressions.
+The most basic example is the generic AS PATH matching, an expression such as:
+.br
+.B bgpscanner\ \-p\ "1\ 2"
+.RE
+matches any packet whose AS PATH crosses link 1 2. The 1 2 link may appear anywhere in the AS PATH.
+The expression can be arbitrarily complex, for example:
+.br
+.B bgpscanner\ \-p\ "1\ 2\ 3\ 4\ 5\ 6\ 7\ 8"
+.RE
+matches any packet with the corresponding AS subsequence appearing anywhere in its AS PATH.
+A '?' (question mark) can be placed anywhere in the expression to signal the fact that any AS number may
+appear in that position, for example:
+.br
+.B bgpscanner\ \-p\ "1\ ?\ 3"
+.RE
+matches any packet whose AS PATH contains a subsequence of length 3, whose first AS is 1 and the last one is 3.
+.P
+The matching expressions may be constrained to operate to the beginning or the end of the AS PATH.
+By prepending '^' (caret) to the expression, the following AS numbers are required to appear at the beginning of the path.
+For example:
+.br
+.B bgpscanner\ \-p\ "^1\ 2"
+.RE
+matches any packet whose AS PATH starts with the link 1 2.
+In a similar fashion, the expression can be forced to match at the end of the path by appending a '$' (dollar sign) at the end of it.
+.br
+.B bgpscanner\ \-p\ "1\ 2$"
+.RE
+matches any packet whose AS PATH ends with the link 1 2.
+A '?' may still be used to match any AS number in the corresponding position, for example:
+.br
+.B bgpscanner\ \-p\ "1\ ?$"
+.RE
+matches any packet whose AS PATH is ending with the second to last AS number being 1.
+The '^' and '$' symbols may be used to create exact matches, such as:
+.br
+.B bgpscanner\ \-p\ "^1\ 2\ 3\ 4$"
+.RE
+matches any packet whose AS PATH is exactly 1 2 3 4.
+.br
+.B bgpscanner\ \-p\ "^1\ 2\ ?\ 4$"
+.RE
+matches any packet whose AS PATH starts with 1 2 and ends with 4, but may have any AS number
+in the second to last position.
+A '*' (star) may be used to match zero or more AS numbers in the position where it appears.
+Note that if the intended usage is to match \fBone\fR or more AS numbers, then a '?' symbol
+should be used before the '*'. For example:
+.br
+.B bgpscanner\ \-p\ "^1\ 2\ *\ 4$"
+.RE
+matches any packet whose AS PATH starts with 1 2, then contains \fBzero\fR or more AS numbers and terminates with 4.
+.br
+.B bgpscanner\ \-p\ "^1\ 2\ ?\ *\ 4$"
+.RE
+matches any packet whose AS PATH starts with 1 2, then contains \fBone\fR or more AS numbers and terminates with 4.
+The metacharacters explained above may be mixed to create arbitrarily complex expressions.
+.
+.PD
+.PP
+.SH FILTER TEMPLATE FILES
+A number of options allows for variants specifying a file to read values (for example the
+.B \-e
+option provides a
+.B \-E
+variant to read each network from a file). This provides means to create
+filter templates that may be slightly customized by additional direct command line arguments.
+For example
+.B bgpscanner
+may be used to filter a certain set of networks that are always interesting, plus a number of varying
+networks. To avoid typing the entire set of networks, it can be written to a \fBtemplate file\fR and
+loaded using the appropriate option:
+.br
+.B bgpscanner\ \-E\ template.txt\ \-e\ "192.65.121.0/24"
+.TP
+The template file is expected to contain a space separated list of tokens in the same format as
+the ones expected by the non-template variant of the same option. Note that newlines are still considered
+spaces.
+Comments may be freely inserted in the file by prepending them with the '#' (hash) character, anything following
+the '#' is ignored up to the next newline.
+Tokens containing spaces may be enclosed in '"' (quotes) to preserve them.
+Template files support the usual C-style character escape sequences.
+.
+.PD
+.PP
+.SH EXAMPLES
+.TP 3
+BGP data announced by feeder AS199036:
+.B bgpscanner\ \-a\ "199036"
+.br
+.TP
+Every packet whose first AS of AS PATH is AS199036
+.B bgpscanner\ \-p\ "^199036"
+.br
+.TP
+Every packet whose last AS of AS PATH is AS3333:
+.B bgpscanner\ \-p\ "3333$"
+.br
+.TP
+Every packet whose AS PATH crosses link AS174 AS3356:
+.B bgpscanner\ \-p\ "174\ 3356"
+.br
+.TP
+Subnets of 193.0.0.0/16 or 2001:67c::/32 destinated to AS3333:
+.B bgpscanner\ \-s\ "193.0.0.0/16"\ \-s "2001:67c::/32"\ \-p\ "3333$"
+.br
+.TP
+Every packet whose AS PATH contains loops:
+.B bgpscanner\ \-l
+.br
+.TP
+Subnets of 192.65.0.0/16 crossing link AS174 AS137:
+.B bgpscanner\ \-s\ "192.65.0.0/16"\ \-p\ "174 137"
+.
+.PD
+.PP
+.SH SEE ALSO
+.BR grep (1)
+.BR awk (1)
+.
+.PD
+.PP
+.SH STANDARDS
+The
+.B bgpscanner
+utility conforms to:
+.PP
+.PD 0
+.IP 1 3
+RFC\ 6396 \- Multi-Threaded Routing Toolkit (MRT) Routing Information Export Format
+.IP 2 3
+RFC\ 8050 \- Multi-Threaded Routing Toolkit (MRT) Routing Information Export Format with BGP Additional Path Extensions
+.PD
+.PP
+.SH AUTHOR
+.B bgpscanner
+was written by
+.UR lorenzo.cogotti@\:alphacogs.\:com
+Lorenzo Cogotti
+.UE .
+With significant contributions by
+.UR luca.sani@\:iit.\:cnr.\:it
+Luca Sani
+.UE and
+.UR alessandro.improta@\:iit.\:cnr.\:it
+Alessandro Improta
+.UE .
+.B bgpscanner
+was heavily influenced by
+.B MRT_data_reader
+.
