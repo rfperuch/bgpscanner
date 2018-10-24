@@ -90,6 +90,7 @@ Print only entries without a loop in their AS PATH.
 .TP
 .B \-o <file>
 Define the output file to store information (defaults to standard output).
+If this option is specified multiple times, the last one prevails over the others.
 .TP
 .B \-p <path expression>
 Print only entries which AS PATH matches the provided expression.
@@ -180,9 +181,12 @@ The pathname extension is used to determine the compression algorithm.
 .
 .PD
 .SH STDOUT
-The standard output shall contain the sequence of bytes read from the input files.
-Nothing else shall be written to the standard output.
+The standard output shall contain a human readable text representation of the BGP packets that respect the filter criteria
+specified by the command options, nothing else shall be written to the standard output.
 If the standard output is a regular file, and is the same file as any of the input file operands, the implementation may treat this as an error.
+If a different output file is specified via the
+.B \-o
+option, then the standard output is not used and is instead redirected to that file.
 .
 .PD
 .SH STDERR
