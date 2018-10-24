@@ -5,6 +5,8 @@ The Isolario MRT data reader utility.
 A performance oriented utility to parse MRT RIB snapshots and updates,
 with filtering capability.
 
+Please refer to the man page for detailed documentation and usage examples.
+
 [Homepage](https://isolario.it)
 
 ## Building
@@ -24,7 +26,7 @@ $ ninja
 Note that BGP Scanner requires the Isolario
 [isocore](https://gitlab.com/Isolario/isocore.git) BGP and MRT library to
 build and run. This dependency is fetched and built automatically by Meson in
-case they are not already available in your system.
+case it is not already available in your system.
 
 In case you want to build the *release* configuration of BGP Scanner, just
 enable the *release* build type, like this:
@@ -48,7 +50,7 @@ $ ninja
 
 For Ubuntu and Debian Based System
 
-First make sure you have git and meson installed (If not please install them)
+First make sure you have git and meson installed (if not please install them):
 
 ```bash
 $ sudo apt install git meson
