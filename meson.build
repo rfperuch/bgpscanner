@@ -1,5 +1,5 @@
 project('bgpscanner', 'c', version : '2.31',
-                          meson_version : '>=0.47.0',
+                          meson_version : '>=0.46.0',
                           license : 'BSD3',
                           default_options : [ 'c_std=c11', 'b_ndebug=if-release' ])
 
