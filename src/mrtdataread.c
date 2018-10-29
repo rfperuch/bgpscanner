@@ -86,7 +86,13 @@ static void report_bad_rib(const char *filename, int err, const rib_header_t *ri
     fputc('\n', stderr);
 }
 
-static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
+typedef enum {
+    PROCESS_SUCCESS = 0,  // all good
+    PROCESS_BAD,          // bad record, but keep going
+    PROCESS_CORRUPTED,    // bad dump, skip the entire dump
+} process_result_t;
+
+static process_result_t processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
 {
     size_t n;
     void *data;
@@ -94,7 +100,7 @@ static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_v
     const bgp4mp_header_t *bgphdr = getbgp4mpheader();
     if (unlikely(!bgphdr)) {
         eprintf("%s: corrupted BGP4MP header (%s)", filename, mrtstrerror(mrterror()));
-        return false;
+        return PROCESS_CORRUPTED;
     }
 
     vm->kp[K_PEER_AS].as = bgphdr->peer_as;
@@ -161,9 +167,9 @@ static int processbgp4mp(const char *filename, const mrt_header_t *hdr, filter_v
     }
 
     if (unlikely(err != BGP_ENOERR))
-        return false;
+        return PROCESS_BAD;
 
-    return true;
+    return PROCESS_SUCCESS;
 }
 
 static int istrivialfilter(filter_vm_t *vm)
@@ -186,7 +192,7 @@ static int ispeeridxref(uint16_t idx)
     return peerrefs[idx >> PEERREF_SHIFT] & (1 << (idx & PEERREF_MASK));
 }
 
-static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
+static process_result_t processtabledumpv2(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
 {
     const rib_header_t *ribhdr;
     const rib_entry_t *rib;
@@ -195,11 +201,11 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
     switch (hdr->subtype) {
     case MRT_TABLE_DUMPV2_PEER_INDEX_TABLE:
         if (unlikely(seen_ribpi)) {
-            eprintf("%s: bad RIB dump, duplicated TABLE_DUMPV2_PEER_INDEX_TABLE, skipping rest of file", filename);
-            return false;
+            eprintf("%s: bad RIB dump, duplicated PEER_INDEX_TABLE, skipping rest of file", filename);
+            return PROCESS_CORRUPTED;
         }
         if (unlikely(pkgseq != 0))
-            eprintf("%s: warning, TABLE_DUMPV2_PEER_INDEX_TABLE is not the first record in file", filename);
+            eprintf("%s: warning, PEER_INDEX_TABLE is not the first record in file", filename);
 
         setribpi();
 
@@ -218,6 +224,10 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
     case MRT_TABLE_DUMPV2_RIB_IPV6_MULTICAST:
     case MRT_TABLE_DUMPV2_RIB_IPV6_UNICAST:
     case MRT_TABLE_DUMPV2_RIB_GENERIC:
+        if (unlikely(!seen_ribpi)) {
+            eprintf("%s: warning, TABLE_DUMPV2 RIB with no PEER_INDEX_TABLE, skipping record", filename);
+            return PROCESS_BAD;
+        }
         ribhdr = startribents(NULL);
         while ((rib = nextribent()) != NULL) {
             int res = true;  // assume packet passes
@@ -274,7 +284,7 @@ static int processtabledumpv2(const char *filename, const mrt_header_t *hdr, fil
         break;
     }
 
-    return true;
+    return PROCESS_SUCCESS;
 }
 
 int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
@@ -322,7 +332,6 @@ int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
 done:
 
     if (seen_ribpi)
-
         mrtclosepi();
 
     if (rw->error(rw)) {
@@ -346,38 +355,37 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm, mrt_dump_fmt_
             break;
 
         const mrt_header_t *hdr = getmrtheader();
+
+        process_result_t result = PROCESS_BAD;  // assume bad record unless stated otherwise
         if (hdr != NULL) {
             switch (hdr->type) {
             case MRT_TABLE_DUMPV2:
-                if (!processtabledumpv2(filename, hdr, vm, format)) {
-                    retval = -1;
-                    goto done;
-                }
-
+                result = processtabledumpv2(filename, hdr, vm, format);
                 break;
 
             case MRT_BGP4MP:
             case MRT_BGP4MP_ET:
-                if (!processbgp4mp(filename, hdr, vm, format)) {
-                    retval = -1;
-                    goto done;
-                }
-
+                result = processbgp4mp(filename, hdr, vm, format);
                 break;
 
             default:
-                // skip packet
+                // skip packet, but not necessarily wrong
+                eprintf("%s: unhandled MRT packet of type: %#x", filename, (unsigned int) hdr->type);
+                result = PROCESS_SUCCESS;
                 break;
             }
         }
 
-
         err = mrtclose();
-        if (unlikely(err != MRT_ENOERR))
+        if (unlikely(err != MRT_ENOERR)) {
             eprintf("%s: corrupted packet: %s", filename, mrtstrerror(err));  // FIXME better reporting
+            retval = -1;  // propagate this error to the caller
+        }
+        if (result != PROCESS_SUCCESS)
+            retval = -1;  // packet is not well formed, so propagate error to the caller
+        if (unlikely(result == PROCESS_CORRUPTED))
+            break;        // we must skip the whole packet
     }
-
-done:
 
     if (seen_ribpi)
         mrtclosepi();
