@@ -78,3 +78,9 @@ If you need to install BGP Scanner globally
 ```bash
 $ sudo ninja install
 ```
+
+After the installation phase, you may need to update
+the linker cache, to do that run the following command:
+```bash
+$ sudo ldconfig
+```
