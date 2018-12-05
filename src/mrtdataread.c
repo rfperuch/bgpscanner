@@ -78,9 +78,9 @@ static int close_bgp_packet(const char *filename)
     return err;
 }
 
-static void report_bad_rib(const char *filename, int err, const rib_header_t *ribhdr, const rib_entry_t *rib)
+static void report_bad_rib(const char *filename, int err, const rib_entry_t *rib)
 {
-    eprintf("%s: bad RIB entry for NLRI %s (%s)", filename, naddrtos(&ribhdr->nlri, NADDR_CIDR), bgpstrerror(err));
+    eprintf("%s: bad RIB entry for NLRI %s (%s)", filename, naddrtos(&rib->nlri, NADDR_CIDR), bgpstrerror(err));
     fprintf(stderr, "attributes segment dump follows:\n");
     hexdump(stderr, rib->attrs, rib->attr_length, "x#|1|80");
     fputc('\n', stderr);
@@ -182,6 +182,11 @@ enum {
     DUMP_RIBS
 };
 
+
+enum {
+    TABLE_DUMP_SUBTYPE_MARKER = -1  // a marker subtype, see processtabledump()
+};
+
 static void refpeeridx(uint16_t idx)
 {
     peerrefs[idx >> PEERREF_SHIFT] |= 1 << (idx & PEERREF_MASK);
@@ -192,13 +197,22 @@ static int ispeeridxref(uint16_t idx)
     return peerrefs[idx >> PEERREF_SHIFT] & (1 << (idx & PEERREF_MASK));
 }
 
-static process_result_t processtabledumpv2(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
+static process_result_t processtabledump(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
 {
-    const rib_header_t *ribhdr;
     const rib_entry_t *rib;
 
     int ribflags = BGPF_GUESSMRT | BGPF_STRIPUNREACH;
-    switch (hdr->subtype) {
+    int subtype  = hdr->subtype;
+    if (hdr->type == MRT_TABLE_DUMP) {
+        // expect attribute lists to be encoded in the appropriate format (disables BGPF_GUESSMRT)
+        ribflags |= BGPF_LEGACYMRT;
+        // we are dealing with the deprecated TABLE_DUMP format, remap
+        // subtype to a spoecial value so we can deal with them in an
+        // uniform way without any code duplication
+        subtype = TABLE_DUMP_SUBTYPE_MARKER;
+    }
+
+    switch (subtype) {
     case MRT_TABLE_DUMPV2_PEER_INDEX_TABLE:
         if (unlikely(seen_ribpi)) {
             eprintf("%s: bad RIB dump, duplicated PEER_INDEX_TABLE, skipping rest of file", filename);
@@ -224,11 +238,14 @@ static process_result_t processtabledumpv2(const char *filename, const mrt_heade
     case MRT_TABLE_DUMPV2_RIB_IPV6_MULTICAST:
     case MRT_TABLE_DUMPV2_RIB_IPV6_UNICAST:
     case MRT_TABLE_DUMPV2_RIB_GENERIC:
+        // every TABLE_DUMPV2 subtype need a peer index
         if (unlikely(!seen_ribpi)) {
             eprintf("%s: warning, TABLE_DUMPV2 RIB with no PEER_INDEX_TABLE, skipping record", filename);
             return PROCESS_BAD;
         }
-        ribhdr = startribents(NULL);
+
+    case TABLE_DUMP_SUBTYPE_MARKER:
+        startribents(NULL);
         while ((rib = nextribent()) != NULL) {
             int res = true;  // assume packet passes
             int must_close_bgp = false;
@@ -245,15 +262,15 @@ static process_result_t processtabledumpv2(const char *filename, const mrt_heade
                 int err;
                 if (ribflags & BGPF_ADDPATH) {
                     netaddrap_t addrap;
-                    addrap.pfx    = ribhdr->nlri;
+                    addrap.pfx    = rib->nlri;
                     addrap.pathid = rib->pathid;
 
                     err = rebuildbgpfrommrt(&addrap, rib->attrs, rib->attr_length, ribflags);
                 } else {
-                    err = rebuildbgpfrommrt(&ribhdr->nlri, rib->attrs, rib->attr_length, ribflags);
+                    err = rebuildbgpfrommrt(&rib->nlri, rib->attrs, rib->attr_length, ribflags);
                 }
                 if (err != BGP_ENOERR) {
-                    report_bad_rib(filename, err, ribhdr, rib);
+                    report_bad_rib(filename, err, rib);
                     continue;
                 }
 
@@ -280,6 +297,7 @@ static process_result_t processtabledumpv2(const char *filename, const mrt_heade
         break;
 
     default:
+        // we can only encounter this fot TABLE_DUMPV2 subtypes
         eprintf("%s: unhandled TABLE_DUMPV2 packet of subtype: %#x", filename, (unsigned int) hdr->subtype);
         break;
     }
@@ -302,7 +320,7 @@ int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
 
         const mrt_header_t *hdr = getmrtheader();
         if (hdr != NULL && hdr->type == MRT_TABLE_DUMPV2) {
-            if (!processtabledumpv2(filename, hdr, vm, MRT_NO_DUMP)) {
+            if (!processtabledump(filename, hdr, vm, MRT_NO_DUMP)) {
                 retval = -1;
                 goto done;
             }
@@ -359,8 +377,9 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm, mrt_dump_fmt_
         process_result_t result = PROCESS_BAD;  // assume bad record unless stated otherwise
         if (hdr != NULL) {
             switch (hdr->type) {
+            case MRT_TABLE_DUMP:
             case MRT_TABLE_DUMPV2:
-                result = processtabledumpv2(filename, hdr, vm, format);
+                result = processtabledump(filename, hdr, vm, format);
                 break;
 
             case MRT_BGP4MP:
