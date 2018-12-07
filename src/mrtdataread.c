@@ -172,6 +172,73 @@ static process_result_t processbgp4mp(const char *filename, const mrt_header_t *
     return PROCESS_SUCCESS;
 }
 
+static process_result_t processzebra(const char *filename, const mrt_header_t *hdr, filter_vm_t *vm, mrt_dump_fmt_t format)
+{
+    size_t n;
+    void *data;
+
+    const zebra_header_t *zhdr = getzebraheader();
+    if (unlikely(!zhdr)) {
+        eprintf("%s: corrupted Zebra BGP header (%s)", filename, mrtstrerror(mrterror()));
+        return PROCESS_CORRUPTED;
+    }
+
+    vm->kp[K_PEER_AS].as = zhdr->peer_as;
+    memcpy(&vm->kp[K_PEER_ADDR].addr, &zhdr->peer_addr, sizeof(vm->kp[K_PEER_ADDR].addr));
+
+    int res, err;
+
+    err = BGP_ENOERR;
+    switch (hdr->subtype) {
+    case MRT_BGP_STATE_CHANGE:
+        // FIXME printstatechange(stdout, bgphdr, "A*F*T", sizeof(uint16_t), &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+        break;
+
+
+    case MRT_BGP_NULL:
+    case MRT_BGP_PREF_UPDATE:
+    case MRT_BGP_SYNC:
+    case MRT_BGP_OPEN:
+    case MRT_BGP_NOTIFY:
+    case MRT_BGP_KEEPALIVE:
+        break;
+    
+    case MRT_BGP_UPDATE:
+        data = unwrapzebra(&n);
+        if (unlikely(!data)) {
+            eprintf("%s: corrupted Zebra BGP message (%s)", filename, mrtstrerror(mrterror()));
+            return false;
+        }
+
+        setbgpwrite(BGP_UPDATE, BGPF_DEFAULT);
+        setbgpdata(data, n);
+        if (unlikely(!bgpfinish(NULL)))
+            break;
+
+        res = bgp_filter(vm);
+        if (res < 0 && res != VM_BAD_PACKET)
+            exprintf(EXIT_FAILURE, "%s: unexpected filter failure (%s)", filename, filter_strerror(res));
+
+        if (res > 0) {
+            const char *fmt = (format == MRT_DUMP_CHEX) ? "xF*T" : "rF*T";
+
+            printbgp(stdout, fmt, &vm->kp[K_PEER_ADDR].addr, vm->kp[K_PEER_AS].as, &hdr->stamp);
+        }
+
+        err = close_bgp_packet(filename);
+        break;
+
+    default:
+        eprintf("%s: unhandled Zebra BGP packet of subtype: %#x", filename, (unsigned int) hdr->subtype);
+        break;
+    }
+
+    if (unlikely(err != BGP_ENOERR))
+        return PROCESS_BAD;
+
+    return PROCESS_SUCCESS;
+}
+
 static int istrivialfilter(filter_vm_t *vm)
 {
     return vm->codesiz == 1 && vm->code[0] == vm_makeop(FOPC_LOAD, true);
@@ -181,7 +248,6 @@ enum {
     DONT_DUMP_RIBS,
     DUMP_RIBS
 };
-
 
 enum {
     TABLE_DUMP_SUBTYPE_MARKER = -1  // a marker subtype, see processtabledump()
@@ -377,6 +443,10 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm, mrt_dump_fmt_
         process_result_t result = PROCESS_BAD;  // assume bad record unless stated otherwise
         if (hdr != NULL) {
             switch (hdr->type) {
+            case MRT_BGP:
+                result = processzebra(filename, hdr, vm, format);
+                break;
+
             case MRT_TABLE_DUMP:
             case MRT_TABLE_DUMPV2:
                 result = processtabledump(filename, hdr, vm, format);
