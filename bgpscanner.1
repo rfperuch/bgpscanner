@@ -187,6 +187,9 @@ If the standard output is a regular file, and is the same file as any of the inp
 If a different output file is specified via the
 .B \-o
 option, then the standard output is not used and is instead redirected to that file.
+The default output format used by
+.B bgpscanner
+is documented in the \fBLINE ORIENTED OUTPUT\fR section.
 .
 .PD
 .SH STDERR
@@ -283,6 +286,78 @@ Comments may be freely inserted in the file by prepending them with the '#' (has
 the '#' is ignored up to the next newline.
 Tokens containing spaces may be enclosed in '"' (quotes) to preserve them.
 Template files support the usual C-style character escape sequences.
+.
+.PD
+.SH LINE ORIENTED OUTPUT
+This output splits the content of MRT data into multiple lines, each one representing either a
+.B ROUTE INFORMATION
+or a 
+.B BGP SESSION STATUS.
+
+.br
+The
+.B ROUTE INFORMATION
+can be either an announcement, a route withdrawn or a routing table (RIB) snapshot.
+Each ROUTE INFORMATION line is a sequence of the following pipe-separated fields:
+.br
+TYPE|SUBNETS|PATH ATTRIBUTES|SOURCE|TIMESTAMP|ASN 32 BIT
+.br
+.TP
+.B TYPE
+Represents the type of the route information. Can be either '=' (RIB snapshot entry), '+' (announcement) or '-' (withdrawn).
+.TP
+.B SUBNETS
+The list of subnets carried into the message. If the information is an announcement, then this field contains the subnets carried into the NLRI and MP_REACH_NLRI field of BGP.
+If the information is a withdrawn, then this field contains the subnets carried into the WITHDRAWN_ROUTES and MP_UNREACH_NLRI field of BGP. If the information is a RIB snapshot entry, this field contains the subnet related to the current RIB entry.
+Multiple subnets are separated by a single space.
+.TP
+.B PATH ATTRIBUTES
+This is a pipe-separated list of the most common BGP path attributes characterizing a route.
+Note that each field may be empty if the related path attribute is not present in the collected BGP data (e.g. route announcements without optional attributes, or route withdrawals).
+The list of path attributes currently displayed is the following:
+.br
+AS_PATH|NEXT_HOP|ORIGIN|ATOMIC_AGGREGATE|AGGREGATOR|COMMUNITIES
+.IP
+If the BGP data source does not support ASN 32 bit capability then the AS_PATH field contains the result of the merging procedure between the AS_PATH and AS4_PATH attributes according to RFC 4893, and the AGGREGATOR field contains the AS4_AGGREGATOR attribute (if present). Otherwise, AS_PATH and AGGREGATOR fields contain their respective attributes.
+.IP
+NEXT_HOP field contains either the NEXT_HOP attribute (IPv4) or the next hop address(es) listed into the MP_REACH_NLRI attribute (IPv6), as described in RFC 4760.
+.IP
+ORIGIN contains the homonym attribute.
+.IP
+ATOMIC_AGGREGATE field contains "AT" if the attribute is set, nothing otherwise.
+.IP
+COMMUNITIES field contains both COMMUNITY (RFC 1997) and LARGE_COMMUNITY (RFC 8092) displayed with their canonical representation. Well-known communities are displayed according to their name as described in IANA website (e.g. NO_EXPORT instead of 65535:65281).
+.TP
+.B SOURCE
+Represents the BGP data source. If the source uses the ADD-PATH extension (RFC 7911) to announce BGP data, then the source is displayed as [IP ASN path-ID], otherwise as [IP ASN].
+.TP
+.B TIMESTAMP
+Indicates the UNIX epoch time at which the information was collected. In the event of an extended timestamp, the UNIX epoch time is followed by a '.' and the microsecond precision
+is appended to it.
+.TP
+.B ASN 32 bit
+If 1 indicates that the source of BGP data has ASN 32 bit capability, 0 otherwise.
+.br
+.PP
+The 
+.B BGP SESSION STATUS
+is encoded as a BGP session state change according to RFC 6936 (Section 4.4.1).
+The format of a line representing a state change is the following:
+.br
+#|OLD_STATE-NEW_STATE|||||||SOURCE|TIMESTAMP|ASN 32 BIT
+
+.TP
+.B OLD_STATE-NEW_STATE
+represent respectively the old and new state of the BGP session according to the BGP Finite State Machine states.
+.TP
+.B SOURCE, TIMESTAMP, ASN 32 BIT
+assume the same meaning as in the
+.B ROUTING INFORMATION
+case.
+.LP
+The number of pipes is the same as in the
+.B ROUTING INFORMATION
+case to ease the parsing.
 .
 .PD
 .PP
