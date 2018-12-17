@@ -386,10 +386,11 @@ int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
 
         const mrt_header_t *hdr = getmrtheader();
         if (hdr != NULL && hdr->type == MRT_TABLE_DUMPV2) {
-            if (!processtabledump(filename, hdr, vm, MRT_NO_DUMP)) {
-                retval = -1;
-                goto done;
-            }
+            process_result_t result = processtabledump(filename, hdr, vm, MRT_NO_DUMP);
+            if (result != PROCESS_SUCCESS)
+                retval = -1;  // packet is not well formed, so propagate error to the caller
+            if (unlikely(result == PROCESS_CORRUPTED))
+                goto done;    // we must skip the whole packet
         }
 
         err = mrtclose();
