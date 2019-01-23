@@ -3,16 +3,16 @@
 bgpscanner \- scan MRT dumps and filter their content.
 .
 .SH SYNOPSIS
-\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-e \fIPREFIX\fR ] [ \-E \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+\fBbgpscanner\fR [ \-cdlL ] [ \-mM \fICOMMSTRING\fR ] [ \-pP \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-e \fIPREFIX\fR ] [ \-E \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
 [ \fIFILE\fR... ]
 .br
-\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-s \fIPREFIX\fR ] [ \-S \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+\fBbgpscanner\fR [ \-cdlL ] [ \-mM \fICOMMSTRING\fR ] [ \-pP \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-s \fIPREFIX\fR ] [ \-S \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
 [ \fIFILE\fR... ]
 .br
-\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-u \fIPREFIX\fR ] [ \-U \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+\fBbgpscanner\fR [ \-cdlL ] [ \-mM \fICOMMSTRING\fR ] [ \-pP \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-u \fIPREFIX\fR ] [ \-U \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
 [ \fIFILE\fR... ]
 .br
-\fBbgpscanner\fR [ \-cdlL ] [ \-p \fIPATHEXPR\fR ] [ \-P \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-r \fIPREFIX\fR ] [ \-R \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
+\fBbgpscanner\fR [ \-cdlL ] [ \-mM \fICOMMSTRING\fR ] [ \-pP \fIPATHEXPR\fR ] [ \-i \fIADDR\fR ] [ \-I \fIFILE\fR ] [ \-a \fIAS\fR ] [ \-A \fIFILE\fR ] [ \-r \fIPREFIX\fR ] [ \-R \fIFILE\fR ] [ \-t \fIATTR_CODE\fR ] [ \-T \fIFILE\fR ]  [ \-o \fIFILE\fR ]
 [ \fIFILE\fR... ]
 .
 .SH DESCRIPTION
@@ -91,6 +91,17 @@ Print only entries without a loop in their AS PATH.
 .B \-o <file>
 Define the output file to store information (defaults to standard output).
 If this option is specified multiple times, the last one prevails over the others.
+.TP
+.B \-m <communities string>
+Print only entries which COMMUNITY attribute contains the provided communities. The
+order is not relevant.
+Communities must be specified in canonical form and space separated, for example: "1234:567 8910:1112".
+Well-known communities can also be specified according to IANA (see \fBSTANDARDS\fR), for example "NO_EXPORT".
+.TP
+.B \-M <communities string>
+Same as
+.B \-m
+, but only prints entries which COMMUNITY attribute does \fBnot\fR contain the provided communities.
 .TP
 .B \-p <path expression>
 Print only entries which AS PATH matches the provided expression.
@@ -408,6 +419,8 @@ utility conforms to:
 RFC\ 6396 \- Multi-Threaded Routing Toolkit (MRT) Routing Information Export Format
 .IP 2 3
 RFC\ 8050 \- Multi-Threaded Routing Toolkit (MRT) Routing Information Export Format with BGP Additional Path Extensions
+.IP 3 3
+IANA Border Gateway Protocol (BGP) Well-known Communities. Updated list of well-known communities as of 2018-03-07.
 .PD
 .PP
 .SH AUTHOR

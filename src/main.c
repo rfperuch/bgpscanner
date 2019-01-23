@@ -54,10 +54,10 @@ static void usage(void)
 {
     fprintf(stderr, "%s: The Isolario MRT data reader utility\n", programnam);
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
-    fprintf(stderr, "\t%s [-cdlL] [-p PATHEXPR] [-P PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-mM COMMSTRING] [-pP PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-e PREFIX] [-E FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-mM COMMSTRING] [-pP PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-s PREFIX] [-S FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-mM COMMSTRING] [-pP PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-u PREFIX] [-U FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
+    fprintf(stderr, "\t%s [-cdlL] [-mM COMMSTRING] [-pP PATHEXPR] [-i ADDR] [-I FILE] [-a AS] [-A FILE] [-r PREFIX] [-R FILE] [-t ATTR_CODE] [-T FILE] [-o FILE] [FILE...]\n", programnam);
     fprintf(stderr, "\n");
     fprintf(stderr, "Available options:\n");
     fprintf(stderr, "\t-a <feeder AS>\n");
@@ -84,10 +84,14 @@ static void usage(void)
     fprintf(stderr, "\t\tPrint only entries without a loop in its AS PATH\n");
     fprintf(stderr, "\t-o <file>\n");
     fprintf(stderr, "\t\tDefine the output file to store information (defaults to stdout)\n");
+    fprintf(stderr, "\t-m <communities string>\n");
+    fprintf(stderr, "\t\tPrint only entries which COMMUNITY attribute contains the specified communities (the order is not relevant)\n");
+    fprintf(stderr, "\t-M <communities string>\n");
+    fprintf(stderr, "\t\tPrint only entries which COMMUNITY attribute does not contain the specified communities (the order is not relevant)\n");
     fprintf(stderr, "\t-p <path expression>\n");
-    fprintf(stderr, "\t\tPrint only entries which AS PATH matches the expression\n");
+    fprintf(stderr, "\t\tPrint only entries which AS PATH attribute matches the expression\n");
     fprintf(stderr, "\t-P <path expression>\n");
-    fprintf(stderr, "\t\tPrint only entries which AS PATH does not match the expression\n");
+    fprintf(stderr, "\t\tPrint only entries which AS PATH attribute does not match the expression\n");
     fprintf(stderr, "\t-r <subnet>\n");
     fprintf(stderr, "\t\tPrint only entries containing subnets related to the given subnet of interest\n");
     fprintf(stderr, "\t-R <file>\n");
@@ -154,6 +158,14 @@ enum {
 
 static uint32_t attr_mask[MAX_ATTRS_BITSET_SIZE];
 static int attr_count = 0;
+
+typedef struct community_match_s {
+    struct community_match_s *next;
+    bool neg;
+    int  kidx;
+} community_match_t;
+
+static community_match_t *community_matches = NULL;
 
 typedef struct as_path_match_s {
     struct as_path_match_s *or_next;  // next match in OR-ed chain
@@ -433,6 +445,22 @@ static void setup_filter(void)
         vm_emit(&vm, FOPC_NOT);
         vm_emit(&vm, FOPC_CFAIL);
     }
+    if (community_matches) {
+        // filter by community, each community_match_t is ORed
+        vm_emit(&vm, FOPC_BLK);
+        for (community_match_t *i = community_matches; i; i = i->next) {
+            vm_emit(&vm, vm_makeop(FOPC_LOADK, i->kidx));
+            vm_emit(&vm, FOPC_UNPACK);
+            vm_emit(&vm, FOPC_COMMEXACT);
+            if (i->neg)
+                vm_emit(&vm, FOPC_NOT);
+            if (i->next)
+                vm_emit(&vm, FOPC_CPASS);
+        }
+        vm_emit(&vm, FOPC_ENDBLK);
+        vm_emit(&vm, FOPC_NOT);
+        vm_emit(&vm, FOPC_CFAIL);
+    }
 
     if (path_match_head) {
         // include the AS PATH filtering logic
@@ -651,6 +679,62 @@ static void parse_as_match_expr(const char *expr, bool negate)
     path_match_tail = expr_head;
 }
 
+static void parse_communities(const char *expr, bool negate)
+{
+    community_t buf[strlen(expr)];  // wild upperbound
+
+    const char *ptr = expr;
+    char *eptr;
+    size_t count = 0;
+    while (true) {
+        ptr = skip_spaces(ptr);
+        if (*ptr == '\0')
+            break;
+
+        community_t c = stocommunity(ptr, &eptr);
+        if (ptr == eptr)
+            exprintf(EXIT_FAILURE, "bad community string: '%s' at %c", expr, *ptr);
+
+        // do not take the same community twice, it would have no effect,
+        // and it would confuse the VM
+        int i;
+        for (i = 0; i < count; i++) {
+            if (buf[i] == c)
+                break;
+        }
+        if (i == count)
+            buf[count++] = c;  // ok, this community is unique
+
+        ptr = eptr;
+    }
+
+    if (count == 0)
+        exprintf(EXIT_FAILURE, "empty community match expression");
+        
+    community_match_t *m = malloc(sizeof(*m));
+    if (unlikely(!m))
+        exprintf(EXIT_FAILURE, "Out of memory");
+
+    // add the community segment to VM heap
+    intptr_t heapptr = vm_heap_alloc(&vm, count * sizeof(*buf), VM_HEAP_PERM);
+    if (unlikely(heapptr == VM_BAD_HEAP_PTR))
+        exprintf(EXIT_FAILURE, "Out of memory");
+
+    memcpy(vm_heap_ptr(&vm, heapptr), buf, count * sizeof(*buf));
+
+    // generate a K constant with the heap array address
+    int kidx = vm_newk(&vm);
+
+    vm.kp[kidx].base  = heapptr;
+    vm.kp[kidx].elsiz = sizeof(*buf);
+    vm.kp[kidx].nels  = count;
+
+    m->neg  = negate;
+    m->kidx = kidx;
+    m->next = community_matches;
+    community_matches = m;
+}
+
 int main(int argc, char **argv)
 {
     int c;
@@ -667,7 +751,7 @@ int main(int argc, char **argv)
     vm.funcs[MRT_FIND_AS_LOOPS_FN] = mrt_find_as_loops;
 
     // parse command line
-    while ((c = getopt(argc, argv, "A:a:cdE:e:fi:I:lLo:p:P:R:r:S:s:t:T:U:u:")) != -1) {
+    while ((c = getopt(argc, argv, "A:a:cdE:e:fi:I:lLm:M:o:p:P:R:r:S:s:t:T:U:u:")) != -1) {
         switch (c) {
         case 'a':
             if (!add_peer_as(optarg))
@@ -740,11 +824,13 @@ int main(int argc, char **argv)
             break;
 
         case 'p':
-            parse_as_match_expr(optarg, false);
+        case 'P':
+            parse_as_match_expr(optarg, c == 'P');
             break;
 
-        case 'P':
-            parse_as_match_expr(optarg, true);
+        case 'm':
+        case 'M':
+            parse_communities(optarg, c == 'M');
             break;
 
         case 'i':
@@ -883,6 +969,11 @@ int main(int argc, char **argv)
 
         path_match_head = t->or_next;
 
+        free(t);
+    }
+    while (community_matches) {
+        community_match_t *t = community_matches;
+        community_matches = t->next;
         free(t);
     }
 
