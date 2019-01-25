@@ -381,8 +381,12 @@ int mrtprintpeeridx(const char* filename, io_rw_t* rw, filter_vm_t *vm)
 
     while (true) {
         int err = setmrtreadfrom(rw);
-        if (err == MRT_EIO)
+        if (unlikely(err == MRT_EIO))
             break;
+        if (unlikely(err != MRT_ENOERR)) {
+            eprintf("%s: corrupted packet: %s", filename, mrtstrerror(err));  // FIXME better reporting
+            continue;
+        }
 
         const mrt_header_t *hdr = getmrtheader();
         if (hdr != NULL && hdr->type == MRT_TABLE_DUMPV2) {
@@ -438,6 +442,11 @@ int mrtprocess(const char *filename, io_rw_t *rw, filter_vm_t *vm, mrt_dump_fmt_
         int err = setmrtreadfrom(rw);
         if (err == MRT_EIO)
             break;
+        if (unlikely(err != MRT_ENOERR)) {
+            eprintf("%s: corrupted packet: %s", filename, mrtstrerror(err));  // FIXME better reporting
+            retval = -1;  // propagate this error to the caller
+            continue;
+        }
 
         const mrt_header_t *hdr = getmrtheader();
 
