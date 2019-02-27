@@ -938,8 +938,10 @@ int main(int argc, char **argv)
             continue;
         }
 
+#ifdef _POSIX_ADVISORY_INFO
         if (fd != STDIN_FILENO)
             posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+#endif
 
         int res;
         if (flags & ONLY_PEERS)
