@@ -938,11 +938,12 @@ int main(int argc, char **argv)
             continue;
         }
 
+#ifndef __APPLE__
 #ifdef _POSIX_ADVISORY_INFO
         if (fd != STDIN_FILENO)
             posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 #endif
-
+#endif
         int res;
         if (flags & ONLY_PEERS)
             res = mrtprintpeeridx(argv[i], iop, &vm);

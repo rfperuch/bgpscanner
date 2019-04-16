@@ -3,9 +3,6 @@ build/
 # documentation directory (produced by doxygen)
 docs/
 
-# external projects
-subprojects/*/
-
 # hidden files
 .*
 !.clang-format
