@@ -1,3 +1,7 @@
+# Fork from BGP Scanner to compile on macOS
+In order to compile this tool on macOS you also need to clone my other fork (isocore) and put it into the subprojects/ directory.
+After that, install the dependencies with homebrew
+
 # BGP Scanner
 
 The Isolario MRT data reader utility.
